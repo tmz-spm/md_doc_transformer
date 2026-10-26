@@ -1,0 +1,15 @@
+Document Converter
+
+Uses pandoc-wasm 1.1.0 (Pandoc, GPL-2.0-or-later).
+Unmodified Pandoc WASM binary, gzip-compressed for transfer.
+Pandoc source and build instructions: https://github.com/jgm/pandoc
+Wrapper source: https://github.com/pandoc/pandoc-wasm
+This application modifies the wrapper to mount nested resource paths.
+Original wrapper license: ./PANDOC-WRAPPER-LICENSE.txt
+Pandoc version: 3.10 (https://github.com/jgm/pandoc/tree/3.10)
+License: https://www.gnu.org/licenses/old-licenses/gpl-2.0.html
+
+KaTeX (MIT): https://github.com/KaTeX/KaTeX
+DOMPurify (Apache-2.0 OR MPL-2.0): https://github.com/cure53/DOMPurify
+fflate (MIT): https://github.com/101arrowz/fflate
+browser_wasi_shim (MIT): https://github.com/bjorn3/browser_wasi_shim

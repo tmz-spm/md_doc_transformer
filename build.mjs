@@ -1,0 +1,12 @@
+import { build } from 'esbuild';
+import { mkdir, readFile, writeFile, cp } from 'node:fs/promises';
+import { gzipSync } from 'node:zlib';
+await mkdir('dist', { recursive: true });
+await build({entryPoints:['app.js','worker.js'],outdir:'dist',bundle:true,format:'esm',minify:true,target:'es2022'});
+for(const name of ['index.html','style.css']) await cp(name,`dist/${name}`);
+await cp('node_modules/katex/dist/katex.min.css','dist/katex.min.css');
+await cp('node_modules/katex/dist/fonts','dist/fonts',{recursive:true});
+await writeFile('dist/pandoc.wasm.gz',gzipSync(await readFile('node_modules/pandoc-wasm/src/pandoc.wasm'),{level:9}));
+await cp('NOTICE.txt','dist/NOTICE.txt');
+await cp('PANDOC-WRAPPER-LICENSE.txt','dist/PANDOC-WRAPPER-LICENSE.txt');
+console.log('Built document converter.');
