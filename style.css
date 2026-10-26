@@ -20,3 +20,8 @@
 .document th{background:transparent;font-weight:inherit}
 .document blockquote{border-left:0;background:transparent;color:inherit;padding:0 0 0 1em;margin:12px 0}
 .document li.task-item{list-style:none}
+
+/* Keep long formulas within the document pane without adding decorations. */
+.math-display { overflow-x: auto; overflow-y: hidden; }
+.math-display .katex-display { margin: .75em 0; }
+.math-error { white-space: pre-wrap; overflow-wrap: anywhere; }

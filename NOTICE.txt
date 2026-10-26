@@ -1,8 +1,14 @@
-文書変換 — 完全オフライン・簡易版
+文書変換
 
-この版の変換処理は独自のブラウザJavaScriptコードです。
-Node.js, npm, Pandoc, katex, DOMPurify, fflate等の外部ランタイムは同梱されていません。
+本文の変換処理は独自のブラウザJavaScriptコードです。
+数式にはKaTeX 0.19.1（MIT）、mathml2omml 0.5.0（LGPL-3.0-or-later）、
+omml2mathml 1.3.0（Apache-2.0）、mathml-to-latex 1.8.0（MIT）を同梱します。
+間接依存を含めたバージョンはvendor/manifest.json、ライセンス本文はvendor/licenses/、
+LGPL変換器の未圧縮ソースはvendor/sources/mathml2omml.jsを参照してください。
+get-domは独自のブラウザDOMアダプターです。
+
+JavaScript・CSS・フォントはすべてローカルに置きます。
+利用時にNode.js、Pandoc、WASM、Python、外部変換サービスは使いません。
 本ツールはPandocの互換実装ではありません。
-
 WordprocessingML（OOXML）の仕様に基づく.docx形式を処理します。
-本ツールはいかなる外部サーバーにも入力文書を送信しません。
+入力文書を外部サーバーへ送信しません。

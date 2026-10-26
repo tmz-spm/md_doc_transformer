@@ -1,0 +1,6 @@
+{
+  "name": "get-dom",
+  "version": "9.0.0",
+  "private": true,
+  "main": "index.cjs"
+}
