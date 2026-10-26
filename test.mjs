@@ -27,9 +27,41 @@ for (const name of ['app-offline.js', 'engine-offline.js']) {
   assert.doesNotMatch(js, /\bfetch\s*\(|XMLHttpRequest|new WebSocket|new Worker|import\s*\(/);
 }
 const pkg = JSON.parse(await readFile('package.json', 'utf8'));
-assert.equal(Object.keys(pkg.dependencies || {}).length, 0);
+assert.deepEqual(Object.keys(pkg.dependencies).sort(), ['katex','mathml2omml','omml2mathml','mathml-to-latex'].sort());
 if ((await readdir('.')).includes('dist')) {
-  assert.deepEqual((await readdir('dist')).sort(), ['index.html', 'style.css', 'engine-offline.js', 'app-offline.js', 'README.txt', 'SUPPORTED_FEATURES.md', 'AUDIT_REPORT.md', 'NOTICE.txt'].sort());
-  for (const name of await readdir('dist')) assert.deepEqual(await readFile(`dist/${name}`), await readFile(name));
+  assert.deepEqual((await readdir('dist')).sort(), ['index.html', 'style.css', 'engine-offline.js', 'app-offline.js', 'README.txt', 'SUPPORTED_FEATURES.md', 'AUDIT_REPORT.md', 'NOTICE.txt', 'vendor'].sort());
+  async function compareTree(folder='') {
+    for(const entry of await readdir('dist/'+folder,{withFileTypes:true})) {
+      const path=folder+entry.name;
+      if(entry.isDirectory())await compareTree(path+'/');
+      else assert.deepEqual(await readFile('dist/'+path),await readFile(path),path);
+    }
+  }
+  await compareTree();
 }
 console.log('PASS: Markdown/TeX, metadata, ZIP, invalid paths, offline assets and distribution');
+
+const { toOmml } = await import('./math-support.js');
+const { DOMParser } = await import('@xmldom/xmldom');
+for (const [tex, tag] of [[String.raw`\frac{1}{2}`, 'f'], [String.raw`\sqrt{x}`, 'rad'], [String.raw`x_i^2`, 'sSubSup'], [String.raw`\sum_{i=1}^n i`, 'nary'], [String.raw`\int_0^1 x^2 dx`, 'nary'], [String.raw`\begin{pmatrix}a&b\\c&d\end{pmatrix}`, 'm']]) {
+  const omml=toOmml(tex,true);
+  const xml=new DOMParser().parseFromString(omml,'application/xml');
+  assert.ok(xml.getElementsByTagNameNS('http://schemas.openxmlformats.org/officeDocument/2006/math',tag).length,tex);
+  assert.match(omml,/<m:oMathPara/);
+}
+assert.throws(()=>toOmml(String.raw`\unknownCommand{x}`));
+const protectedMath=String.raw`\[\begin{aligned}a_1 &= \textbf{x} \\ b &= \{1,2\}\end{aligned}\]`;
+assert.equal(C.fromTex(protectedMath)[0].text,String.raw`\begin{aligned}a_1 &= \textbf{x} \\ b &= \{1,2\}\end{aligned}`);
+assert.equal(C.mdBlocks('$$x^2$$')[0].type,'math');
+console.log('PASS: JS-only editable OMML math, unsupported commands and protected TeX');
+
+const special=toOmml(String.raw`\text{A \& B} < x`,true);
+const specialXML=new DOMParser().parseFromString(special,'application/xml');
+assert.ok(specialXML.documentElement.textContent.includes('&'));
+assert.ok(specialXML.documentElement.textContent.includes('<'));
+for(const match of (await readFile('vendor/katex.min.css','utf8')).matchAll(/url\(([^)]+)\)/g)) {
+  assert.doesNotMatch(match[1],/^https?:/);
+  await readFile('vendor/'+match[1].replace(/['"]/g,''));
+}
+assert.doesNotMatch(await readFile('vendor/math-libraries.js','utf8'), /XMLHttpRequest|new WebSocket|WebAssembly/);
+console.log('PASS: math XML escaping, local fonts and JavaScript-only runtime');

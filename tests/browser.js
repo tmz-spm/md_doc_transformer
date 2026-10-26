@@ -79,6 +79,71 @@
     let rejected = false; try { await C.docxRead(new Blob(['broken'])); } catch { rejected = true; }
     check(rejected, '不正ファイルを拒否');
   });
+
+  const formulas = [
+    String.raw`\frac{-b\pm\sqrt{b^2-4ac}}{2a}`,
+    String.raw`x_i^2 + \alpha`,
+    String.raw`\int_0^1 x^2\,dx`,
+    String.raw`\sum_{i=1}^{n}i`,
+    String.raw`\begin{pmatrix}a&b\\c&d\end{pmatrix}`,
+    String.raw`\text{A \& B} < x`,
+    String.raw`\begin{aligned}a_1 &= b\\c &= d\end{aligned}`
+  ];
+  await test('数式: 分数・平方根・添字・積分・総和・行列・連立の描画', () => {
+    const host=document.createElement('div');
+    C.preview(formulas.map(text=>({type:'math',text})),host);
+    check(host.querySelectorAll('.katex').length===formulas.length,'全数式をKaTeXで描画');
+    check(!host.querySelector('.math-error'),'描画失敗なし');
+  });
+  await test('数式: Wordへ編集可能なOMML出力し、Wordから読み戻す', async () => {
+    const warnings=[];
+    const word=await C.buildDocx([{type:'p',text:'行内 $x_i^2$ の数式'},...formulas.map(text=>({type:'math',text})),{type:'table',hasHeader:false,borders:false,rows:[[String.raw`$\frac{1}{2}$`]]}],{},warnings);
+    check(!warnings.length,warnings.join('\n'));
+    const files=await C.zipRead(word),xml=new DOMParser().parseFromString(new TextDecoder().decode(files['word/document.xml']),'application/xml');
+    check(!xml.querySelector('parsererror'),'WordのXMLが正常');
+    const ns='http://schemas.openxmlformats.org/officeDocument/2006/math';
+    for(const tag of ['oMathPara','oMath','f','rad','sSubSup','nary','m'])check(xml.getElementsByTagNameNS(ns,tag).length>0,tag);
+    const back=await C.docxRead(word);
+    check(!back.warnings.length,back.warnings.join('\n'));
+    check(back.blocks.filter(b=>b.type==='math').length===formulas.length,'別行数式を維持');
+    check(back.blocks.find(b=>b.type==='table').rows[0][0].includes('\\frac'),'表内の数式を保持');
+    const md=C.blocksToMarkdown(back.blocks),tex=C.toTex(back.blocks);
+    check(md.includes('\\frac')&&md.includes('\\sqrt'),'分数・平方根を文字連結にしない');
+    check(tex.includes('\\begin{')&&tex.includes('a'),'行列の構造');
+    const againWarnings=[];await C.buildDocx(back.blocks,{},againWarnings);
+    check(!againWarnings.length,'Word経由の数式を再度OMMLへ変換: '+againWarnings.join('\n'));
+  });
+  await test('数式: 外部Word由来の別接頭辞OMML・数式読込失敗の注意', async () => {
+    const files=await C.zipRead(word);
+    files['word/document.xml']=new TextEncoder().encode(`<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:q="http://schemas.openxmlformats.org/officeDocument/2006/math"><w:body><w:p><w:r><w:t>外部の数式 </w:t></w:r><q:oMath><q:f><q:num><q:r><q:t>1</q:t></q:r></q:num><q:den><q:rad><q:deg/><q:e><q:r><q:t>x</q:t></q:r></q:e></q:rad></q:den></q:f></q:oMath></w:p><w:p><q:oMathPara><q:oMath><q:r><q:t>y</q:t></q:r></q:oMath></q:oMathPara></w:p></w:body></w:document>`);
+    const back=await C.docxRead(C.zipWrite(files));
+    check(!back.warnings.length,back.warnings.join('\n'));
+    check(back.blocks[0].text.includes('\\frac')&&back.blocks[0].text.includes('\\sqrt'),'接頭辞によらず構造を読む');
+    check(back.blocks[1].type==='math','外部の独立数式');
+    files['word/document.xml']=new TextEncoder().encode('<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"><w:body><w:p><m:oMath/></w:p></w:body></w:document>');
+    const broken=await C.docxRead(C.zipWrite(files));
+    check(broken.warnings.length>0,'読めない数式を黙って落とさない');
+  });
+  await test('数式: TeXの数式を文字装飾や表の構文として誤解釈しない', () => {
+    const tex=String.raw`\[\begin{aligned}a_1 &= \textbf{x} \\ b &= \{1,2\}\end{aligned}\]`;
+    const blocks=C.fromTex(tex);
+    check(blocks[0].type==='math'&&blocks[0].text.includes('\\textbf{x}')&&blocks[0].text.includes('a_1'),'数式を保護');
+    check(C.fromTex(String.raw`\begin{equation}x^2\end{equation}`)[0].type==='math','equation環境');
+    check(C.fromTex(String.raw`\begin{align}a&=b\\c&=d\end{align}`)[0].text.includes('aligned'),'align環境');
+    const host=document.createElement('div');C.preview(C.mdBlocks('`$x^2$`'),host);
+    check(host.querySelector('code')&&!host.querySelector('.katex'),'コードを数式として描画しない');
+  });
+  await test('数式: 未対応コマンドは元ソースと注意を保持 / 危険なHTMLなし', async () => {
+    const source=String.raw`\unknownCommand{x}`,warnings=[];
+    const word=await C.buildDocx([{type:'math',text:source}],{},warnings);
+    check(warnings.length>0,'未対応数式の注意');
+    const files=await C.zipRead(word);
+    check(new TextDecoder().decode(files['word/document.xml']).includes('unknownCommand'),'元ソースを保持');
+    const host=document.createElement('div');window.OfflineMath.render(source,host,true);
+    check(host.classList.contains('math-error')&&host.textContent.includes(source),'プレビューにも元ソース');
+    window.OfflineMath.render(String.raw`\href{javascript:alert(1)}{click}`,host);
+    check(!host.querySelector('a[href^="javascript:"],script,img'),'外部実行を許可しない');
+  });
   const frame = document.getElementById('app');
   if (!frame.contentDocument?.getElementById('editor')) await new Promise(resolve => frame.addEventListener('load', resolve, { once: true }));
   const doc = frame.contentDocument, win = frame.contentWindow, $ = id => doc.getElementById(id);

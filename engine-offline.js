@@ -1,4 +1,4 @@
-/* Fully offline document converter, no packages and no network access. */
+/* Browser document converter. Math libraries are bundled locally; no network access. */
 (() => {
   'use strict';
   const enc = new TextEncoder(), dec = new TextDecoder();
@@ -76,6 +76,7 @@
       if((m=s.match(/^\s{0,3}(```+|~~~+)(.*)$/))){const fence=m[1],lang=m[2].trim(),a=[];i++;while(i<lines.length&&!lines[i].trimStart().startsWith(fence)){a.push(lines[i++]);}if(i<lines.length)i++;b.push({type:'code',text:a.join('\n'),lang});continue;}
       if((m=s.match(/^\s{0,3}(#{1,6})\s+(.*?)\s*#*\s*$/))){b.push({type:'heading',level:m[1].length,text:m[2]});i++;continue;}
       if(/^\s{0,3}(---+|\*\*\*+|___+)\s*$/.test(s)){b.push({type:'hr'});i++;continue;}
+      if((m=s.match(/^\s*\$\$(.+?)\$\$\s*$/))){b.push({type:'math',text:m[1].trim()});i++;continue;}
       if(s.trim()==='$$'){const a=[];i++;while(i<lines.length&&lines[i].trim()!=='$$')a.push(lines[i++]);if(i<lines.length)i++;b.push({type:'math',text:a.join('\n')});continue;}
       if(/^\s{0,3}>/.test(s)){const a=[];while(i<lines.length&&/^\s{0,3}>/.test(lines[i]))a.push(lines[i++].replace(/^\s{0,3}> ?/,''));b.push({type:'quote',text:a.join(' ')});continue;}
       // A Word/TeX table without a heading row cannot be represented by a GFM pipe table
@@ -98,7 +99,7 @@
         b.push({type:'list',ordered,items});continue;
       }
       const a=[];
-      while(i<lines.length&&lines[i].trim()&&!/^\s{0,3}(#{1,6}\s|>|[-+*]\s|\d+[.)]\s|```|~~~|\||(?:-{3,}|\*{3,}|_{3,})\s*$)/.test(lines[i]))a.push(lines[i++]);
+      while(i<lines.length&&lines[i].trim()&&!/^\s{0,3}(#{1,6}\s|>|[-+*]\s|\d+[.)]\s|```|~~~|\||\$\$|(?:-{3,}|\*{3,}|_{3,})\s*$)/.test(lines[i]))a.push(lines[i++]);
       if(!a.length) a.push(lines[i++]);b.push({type:'p',text:a.join(' ')});
     }
     return b;
@@ -146,7 +147,7 @@
     }
   }).join('\n\n');
     if(!standalone)return body+'\n';
-    return '\\documentclass{ltjsarticle}\n\\usepackage{graphicx}\n\\usepackage{hyperref}\n\\usepackage{xcolor}\n\\usepackage[normalem]{ulem}\n\\begin{document}\n'+body+'\n\\end{document}\n';
+    return '\\documentclass{ltjsarticle}\n\\usepackage{amsmath,amssymb}\n\\usepackage{graphicx}\n\\usepackage{hyperref}\n\\usepackage{xcolor}\n\\usepackage[normalem]{ulem}\n\\begin{document}\n'+body+'\n\\end{document}\n';
   }
   function texInline(s){
     let t=s.replace(/\\href\{([^{}]*)\}\{([^{}]*)\}/g,(_,url,title)=>`[${title}](${url})`)
@@ -175,6 +176,18 @@
     }).join('\n');
   }
   function fromTex(src){let s=removeTexComments(src);
+    // Protect math and verbatim before the text parser touches underscores, braces,
+    // table separators, line breaks, or commands such as \textbf inside formulas.
+    let prefix='\uE000MATH';while(s.includes(prefix))prefix+='X';
+    const saved=[];
+    const hold=value=>{const token=prefix+saved.length+'\uE001';saved.push([token,value]);return token;};
+    s=s.replace(/\\begin\{verbatim\}([\s\S]*?)\\end\{verbatim\}/g,(_,v)=>hold('```\n'+v.replace(/^\n|\n$/g,'')+'\n```'));
+    s=s.replace(/\\begin\{(equation\*?|align\*?|gather\*?)\}([\s\S]*?)\\end\{\1\}/g,(_,env,v)=>{
+      const kind=env.startsWith('align')?'aligned':env.startsWith('gather')?'gathered':null;
+      return hold('$$\n'+(kind?'\\begin{'+kind+'}\n':'')+v.trim()+(kind?'\n\\end{'+kind+'}':'')+'\n$$');
+    });
+    s=s.replace(/\\\[([\s\S]*?)\\\]|\$\$([\s\S]*?)\$\$|\\\(([\s\S]*?)\\\)|(?<![\\$])\$(?!\$)((?:\\[\s\S]|[^$\\])+?)\$/g,
+      (_,a,b,c,d)=>hold(a!==undefined||b!==undefined?'$$\n'+(a??b).trim()+'\n$$':'$'+(c??d).trim()+'$'));
     const beg=s.indexOf('\\begin{document}'),end=s.indexOf('\\end{document}');if(beg>=0)s=s.slice(beg+16,end>=0?end:undefined);
     s=s.replace(/\\(section|subsection|subsubsection|paragraph|subparagraph)\*?\{([^{}]*)\}/g,(_,k,t)=>'#'.repeat({section:1,subsection:2,subsubsection:3,paragraph:4,subparagraph:5}[k])+' '+texInline(t)+'\n');
     s=s.replace(/^\s*\\hrule\s*$/gm,'---');
@@ -186,11 +199,13 @@
       const bordered=/\\hline\b/.test(v);const rows=v.replace(/\\hline/g,'').split(/\\\\/).map(y=>y.trim()).filter(Boolean).map(y=>y.split(/(?<!\\)&/).map(z=>texInline(z.trim())));
       if(!rows.length)return '';return blocksToMarkdown([{type:'table',rows,hasHeader:false,borders:bordered}]).trim();
     });
-    return mdBlocks(s.split('\n').map(texInline).join('\n').trim());
+    s=s.split('\n').map(texInline).join('\n');
+    for(const [token,value] of saved)s=s.replaceAll(token,()=>value);
+    return mdBlocks(s.trim());
   }
   async function docxRead(input){
     const z=await zipRead(input,p=>p.startsWith('word/')); if(!z['word/document.xml'])throw Error('Word .docx の本文を読み込めませんでした');
-    const xml=parseXML(dec.decode(z['word/document.xml']));const body=at(xml,'body'), blocks=[],resources={}, rels={};
+    const xml=parseXML(dec.decode(z['word/document.xml']));const body=at(xml,'body'), blocks=[],resources={}, rels={},warnings=[];
     if(z['word/_rels/document.xml.rels']){const x=parseXML(dec.decode(z['word/_rels/document.xml.rels']));for(const r of x.getElementsByTagNameNS(P,'Relationship')) rels[r.getAttribute('Id')]={target:r.getAttribute('Target'),type:r.getAttribute('Type'),external:r.getAttribute('TargetMode')==='External'};}
     const numberFormats={};
     if(z['word/numbering.xml']){
@@ -226,8 +241,18 @@
       if(attr(first(prop,'rStyle'),'val')==='Code')v='`'+v+'`';
       return v;
     }
+    function readMath(node){
+      try {if(!window.OfflineMath)throw Error('数式ライブラリがありません');return window.OfflineMath.fromOmml(node);}
+      catch(error){warnings.push('Word数式の構造を読み取れず、文字列として残しました: '+error.message);return null;}
+    }
     function para(p){const pp=first(p,'pPr'),sty=attr(first(pp,'pStyle'),'val'),h=/^Heading([1-6])$/i.exec(sty),hl=/^heading ([1-6])$/i.exec(sty),num=first(pp,'numPr');let txt='';
-      for(const c of p.children){if(c.localName==='r')txt+=textRun(c);else if(c.localName==='oMath' || c.localName==='oMathPara'){const raw=Array.from(c.getElementsByTagNameNS('http://schemas.openxmlformats.org/officeDocument/2006/math','t')).map(n=>n.textContent).join('');if(raw)txt+='$'+raw+'$';}
+      for(const c of p.children){if(c.localName==='r')txt+=textRun(c);else if(c.localName==='oMath' || c.localName==='oMathPara'){
+        const tex=readMath(c);
+        if(tex!==null){
+          if(c.localName==='oMathPara'&&Array.from(p.children).every(n=>n===c||n.localName==='pPr'))return {type:'math',text:tex};
+          txt+='$'+tex+'$';
+        }else txt+=escapeMdLiteral(Array.from(c.getElementsByTagNameNS('http://schemas.openxmlformats.org/officeDocument/2006/math','t')).map(n=>n.textContent).join(''));
+      }
       else if(c.localName==='hyperlink'){
         const v=Array.from(c.children).filter(x=>x.localName==='r').map(textRun).join('');const rel=rels[c.getAttributeNS(R,'id')];txt+=(rel?.external&&rel.target)?`[${v}](${rel.target})`:v;
       }else if(c.localName==='sdt'){txt+=Array.from(c.getElementsByTagNameNS(W,'r')).map(textRun).join('');}}
@@ -237,20 +262,32 @@
       return {type:'p',text:txt};
     }
     for(const c of body.children){if(c.localName==='p'){const x=para(c);if(x){if(x.type==='listitem'){let b=blocks.at(-1);if(!b||b.type!=='list'||b.ordered!==x.ordered||!!b.task!==!!x.task){b={type:'list',ordered:x.ordered,task:!!x.task,items:[]};blocks.push(b);}b.items.push(x.text);}else blocks.push(x);}}
-      else if(c.localName==='tbl'){const rows=[];for(const row of getChildren(c,'tr')){const cells=[];for(const cell of getChildren(row,'tc'))cells.push(getChildren(cell,'p').map(p=>para(p)?.text||'').join(' '));rows.push(cells);}
+      else if(c.localName==='oMathPara'){const tex=readMath(c);if(tex!==null)blocks.push({type:'math',text:tex});else{const raw=Array.from(c.getElementsByTagNameNS('http://schemas.openxmlformats.org/officeDocument/2006/math','t')).map(n=>n.textContent).join('');if(raw)blocks.push({type:'p',text:escapeMdLiteral(raw)});}}
+      else if(c.localName==='tbl'){const rows=[];for(const row of getChildren(c,'tr')){const cells=[];for(const cell of getChildren(row,'tc'))cells.push(getChildren(cell,'p').map(p=>{const b=para(p);return b?.type==='math'?'$'+b.text+'$':b?.text||'';}).join(' '));rows.push(cells);}
         const hdr=first(first(getChildren(c,'tr')[0],'trPr'),'tblHeader');
         const borderNode=first(first(c,'tblPr'),'tblBorders');
         const borders=!!borderNode&&Array.from(borderNode.children).some(x=>!['none','nil'].includes(attr(x,'val')));
         blocks.push({type:'table',rows,hasHeader:!!hdr&&attr(hdr,'val')!=='0',borders});}}
-    return {blocks,resources};
+    return {blocks,resources,warnings};
   }
-  function docxMake(blocks,resources={}){
+  function docxMake(blocks,resources={},warnings=[]){
     let linkId=10,imgId=100,links=[],assets={},mediaTypes={},hasNumber=false;
     const putRun=(t,style='')=>`<w:r>${style?`<w:rPr>${style}</w:rPr>`:''}${String(t).split(/(\n|\t)/).map(part=>part==='\n'?'<w:br/>':part==='\t'?'<w:tab/>':`<w:t xml:space="preserve">${esc(part)}</w:t>`).join('')}</w:r>`;
+    function mathRun(tex,display=false){
+      try {
+        if(!window.OfflineMath)throw Error('数式ライブラリがありません');
+        const omml=window.OfflineMath.toOmml(tex,display);
+        parseXML(omml); // Never insert malformed XML into a document.
+        return omml;
+      }catch(error){
+        warnings.push('数式をWord数式に変換できず、元のTeXを文字列として残しました: '+error.message);
+        return putRun(display?'$$ '+tex+' $$':'$'+tex+'$');
+      }
+    }
     function runInline(s){return inlineParts(s).map(v=>{
       switch(v.type){
         case 'bold':return putRun(v.text,'<w:b/>');case 'italic':return putRun(v.text,'<w:i/>');case 'strike':return putRun(v.text,'<w:strike/>');case 'code':return putRun(v.text,'<w:rStyle w:val="Code"/>');
-        case 'math':return putRun('$'+v.text+'$');
+        case 'math':return mathRun(v.text);
         case 'underline':return putRun(v.text,'<w:u w:val="single"/>');
         case 'highlight':return putRun(v.text,'<w:highlight w:val="yellow"/>');
         case 'sup':return putRun(v.text,'<w:vertAlign w:val="superscript"/>');
@@ -277,7 +314,7 @@
          }
        }
       else if(b.type==='code')out.push(paragraph(b.text,'<w:pStyle w:val="Code"/>'));
-      else if(b.type==='math')out.push(paragraph('$$ '+b.text+' $$'));
+      else if(b.type==='math')out.push('<w:p>'+mathRun(b.text,true)+'</w:p>');
       else if(b.type==='hr')out.push('<w:p><w:pPr><w:pBdr><w:bottom w:val="single" w:sz="6" w:color="888888"/></w:pBdr></w:pPr></w:p>');
       else if(b.type==='table')out.push(`<w:tbl><w:tblPr><w:tblW w:w="0" w:type="auto"/>${b.borders!==false?'<w:tblBorders><w:bottom w:val="single"/><w:top w:val="single"/><w:left w:val="single"/><w:right w:val="single"/><w:insideH w:val="single"/><w:insideV w:val="single"/></w:tblBorders>':''}</w:tblPr><w:tblGrid>${Array.from({length:Math.max(1,...b.rows.map(r=>r.length))},()=>'<w:gridCol w:w="2400"/>').join('')}</w:tblGrid>${b.rows.map((row,i)=>'<w:tr>'+(i===0&&b.hasHeader!==false?'<w:trPr><w:tblHeader w:val="1"/></w:trPr>':'')+row.map(cell=>`<w:tc><w:tcPr><w:tcW w:w="2400" w:type="dxa"/></w:tcPr>${paragraph(cell)}</w:tc>`).join('')+'</w:tr>').join('')}</w:tbl>`);
     }
@@ -290,18 +327,18 @@
     for(const [k,v] of Object.entries(assets))files[k]=v instanceof Uint8Array?v:new Uint8Array();
     return {files,assets};
   }
-  async function buildDocx(blocks,resources){const {files,assets}=docxMake(blocks,resources);for(const [key,blob] of Object.entries(assets))files[key]=new Uint8Array(await blob.arrayBuffer());return zipWrite(files);}
+  async function buildDocx(blocks,resources,warnings=[]){const {files,assets}=docxMake(blocks,resources,warnings);for(const [key,blob] of Object.entries(assets))files[key]=new Uint8Array(await blob.arrayBuffer());return zipWrite(files);}
   function preview(blocks,host,resources={},urlList=[]){
     const element=(tag,text,into=host)=>{const n=document.createElement(tag);if(text!=null)n.textContent=text;into.append(n);return n;};
     function renderInline(s,into){for(const v of inlineParts(s)){let n;
-      switch(v.type){case 'bold':n=element('strong',v.text,into);break;case 'italic':n=element('em',v.text,into);break;case 'strike':n=element('s',v.text,into);break;case 'underline':n=element('u',v.text,into);break;case 'highlight':n=element('mark',v.text,into);break;case 'sup':n=element('sup',v.text,into);break;case 'sub':n=element('sub',v.text,into);break;case 'code':n=element('code',v.text,into);break;case 'math':n=element('code',v.text,into);n.className='inline-math';break;
+      switch(v.type){case 'bold':n=element('strong',v.text,into);break;case 'italic':n=element('em',v.text,into);break;case 'strike':n=element('s',v.text,into);break;case 'underline':n=element('u',v.text,into);break;case 'highlight':n=element('mark',v.text,into);break;case 'sup':n=element('sup',v.text,into);break;case 'sub':n=element('sub',v.text,into);break;case 'code':n=element('code',v.text,into);break;case 'math':n=element('span',null,into);if(window.OfflineMath)window.OfflineMath.render(v.text,n);else n.textContent='$'+v.text+'$';break;
         case 'link':n=element('a',v.text,into);if(/^https?:\/\//i.test(v.href)){n.href=v.href;n.rel='noopener noreferrer';n.target='_blank';}break;
         case 'image':{const name=normalize(v.href),file=resources[name];if(file){n=element('img',null,into);n.alt=v.text;n.src=URL.createObjectURL(file);urlList.push(n.src);n.style.maxWidth='100%';}else element('span','!['+v.text+']('+v.href+')',into);break;}
         default:element('span',v.text,into);
       }}
     }
     host.replaceChildren();for(const b of blocks){let n;
-      switch(b.type){case 'heading':n=element('h'+b.level);renderInline(b.text,n);break;case 'p':n=element('p');renderInline(b.text,n);break;case 'quote':n=element('blockquote');renderInline(b.text,n);break;case 'hr':element('hr');break;case 'math':n=element('pre');element('code',b.text,n);break;case 'code':n=element('pre');element('code',b.text,n);break;
+      switch(b.type){case 'heading':n=element('h'+b.level);renderInline(b.text,n);break;case 'p':n=element('p');renderInline(b.text,n);break;case 'quote':n=element('blockquote');renderInline(b.text,n);break;case 'hr':element('hr');break;case 'math':n=element('div');n.className='math-display';if(window.OfflineMath)window.OfflineMath.render(b.text,n,true);else n.textContent='$$\n'+b.text+'\n$$';break;case 'code':n=element('pre');element('code',b.text,n);break;
         case 'list':n=element(b.ordered?'ol':'ul');for(const t of b.items){const li=element('li',null,n);if(/^[☐☑]\s/.test(t))li.className='task-item';renderInline(t,li);}break;
         case 'table':n=element('table');if(b.borders!==false)n.classList.add('bordered-table');for(let i=0;i<b.rows.length;i++){const tr=element('tr',null,n);for(const x of b.rows[i]){const c=element(i===0&&b.hasHeader!==false?'th':'td',null,tr);renderInline(x,c);}}break;
       }

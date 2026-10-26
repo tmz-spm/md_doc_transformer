@@ -1,6 +1,6 @@
 # 文書変換アプリのコード案内
 
-この版は `document-converter-offline-audited.zip` の8ファイルを基準とします。ビルドしなくても `index.html` を直接開けます。
+この版は `document-converter-offline-audited.zip` を基準とし、数式用のJavaScriptライブラリを `vendor/` に追加しています。ビルドしなくても `index.html` を直接開けます。
 
 ```text
 index.html → engine-offline.js → window.OfflineConverter
@@ -17,7 +17,7 @@ index.html → engine-offline.js → window.OfflineConverter
 | `SUPPORTED_FEATURES.md` | 対応・部分対応・未対応の一覧 |
 | `AUDIT_REPORT.md` | ZIP作成時の監査記録と残る制約 |
 | `README.txt` / `NOTICE.txt` | 配布ZIPに含める操作説明と使用技術の説明 |
-| `build.mjs` | 固定の8ファイルを空にした `dist/` へコピー。WASM等の旧生成物も残さない |
+| `build.mjs` | アプリファイルとvendor/を空にした `dist/` へコピー。WASM等の旧生成物も残さない |
 | `serve.mjs` | 任意の手元確認用HTTPサーバー。既定は `dist/`、引数 `.` でソースを配信 |
 | `test.mjs` | Node.js組み込み機能だけで実行する構成・解析・ZIPテスト |
 | `tests/browser.html` / `tests/browser.js` | ブラウザのXML/DOM/ZIP APIと実際のUIによる回帰テスト |
@@ -31,3 +31,13 @@ index.html → engine-offline.js → window.OfflineConverter
 ## 編集箇所の目安
 
 操作は `app-offline.js`、構文・変換結果は `engine-offline.js`、画面は `index.html` と `style.css` を編集します。対応範囲を変えた場合は対応表とREADMEも更新し、Nodeテストとブラウザテストを実行してください。WordのOMMLや脚注を完全に保持する実装ではありません。
+
+## 数式
+
+`math-support.js` はKaTeX・mathml2omml・omml2mathml・mathml-to-latexをつなぐソースです。`scripts/vendor-math.mjs` がブラウザ用の `vendor/math-libraries.js` を生成し、グローバル `OfflineMath` のrender/toOmml/fromOmmlを公開します。index.htmlではこの同梱JSをエンジンより先に読み込みます。
+
+get-dom依存は `scripts/browser-dom` のブラウザDOMアダプターで置き換えます。Node向けの古いjsdomスタックをインストールしません。npmのfile依存は `.npmrc` のinstall-links=trueで実体として導入します。
+
+TeX数式は本文の文字装飾・表の変換より前に保護します。Word出力失敗は元TeXと注意に、Word読込失敗は取得可能な文字と注意になります。`docxRead()` のwarningsと `buildDocx()` 第3引数の配列でUIへ伝えます。対応を変えた場合はNodeテストとブラウザテストの数式ケースも更新してください。
+
+XPathの間接依存もAPI互換の0.0.34（MIT）へ固定しています。更新時はWord由来のOMMLと表内数式の回帰ケースを実行してください。
