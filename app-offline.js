@@ -152,5 +152,5 @@
   // The full Pandoc feature set, including a reference Word template, is not provided by this dependency-free build.
   $('add-reference').disabled=true;$('add-reference').title='簡易オフライン版では未対応です';$('reference-name').textContent='未対応（簡易版）';$('remove-reference').hidden=true;
   $('cancel').hidden=true;
-  inputChanged();scheduleLivePreview(true);status('準備完了 — Node.js不要・完全オフライン','success');
+  inputChanged();scheduleLivePreview(true);status('準備完了','success');
 })();
