@@ -1,26 +1,47 @@
 <!doctype html>
 <html lang="ja">
-<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="description" content="Word・Markdown・TeXの相互変換"><title>文書変換</title><link rel="stylesheet" href="./style.css"><link rel="stylesheet" href="./katex.min.css"></head>
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="description" content="Word・Markdown・TeXの相互変換"><title>文書変換</title><link rel="stylesheet" href="./style.css"></head>
 <body>
-<header><div class="brand"><span class="logo" aria-hidden="true">⇄</span><h1>文書変換</h1></div><div class="head-actions"><span class="local"><i></i>ブラウザ内で処理</span><button id="help" class="quiet">対応表 <span aria-hidden="true">↗</span></button></div></header>
+<header><div class="brand"><span class="logo" aria-hidden="true">⇄</span><h1>文書変換</h1></div><div class="head-actions"><button id="help" class="quiet">対応表 <span aria-hidden="true">↗</span></button></div></header>
 <main>
 <section class="conversion" aria-label="変換設定"><div class="format"><label for="from">入力</label><select id="from"><option value="markdown">Markdown .md</option><option value="docx">Word .docx</option><option value="latex">TeX .tex</option></select></div><button id="swap" class="swap" aria-label="入力と出力を入れ替える" title="変換結果を入力にする">⇄</button><div class="format"><label for="to">出力</label><select id="to"><option value="docx">Word .docx</option><option value="markdown">Markdown .md</option><option value="latex">TeX .tex</option></select></div><button id="convert" class="primary">変換 <span aria-hidden="true">→</span></button><button id="cancel" class="quiet" hidden>キャンセル</button></section>
 <section class="workspace">
 <div class="pane input-pane"><div class="pane-toolbar"><div class="pane-title"><span class="index">01</span><span id="input-title">入力</span></div><div><button id="sample" class="quiet small">サンプル</button><button id="open" class="quiet small">ファイルを開く <span aria-hidden="true">↑</span></button></div></div>
-<div id="drop-area"><textarea id="editor" aria-label="入力文書" spellcheck="false" placeholder="# 見出し&#10;&#10;ここにMarkdownを入力"></textarea><div id="docx-input" class="file-empty" hidden><span class="file-icon" aria-hidden="true">W</span><strong id="docx-name">Wordファイルを選択</strong><span id="docx-size">.docxをここにドロップ</span><button id="choose-docx" class="secondary">ファイルを開く</button></div></div>
+<div id="input-tabs" class="input-view-tabs" role="tablist" aria-label="入力の表示切り替え"><button id="edit-source-tab" class="tab active" type="button" role="tab" aria-selected="true" aria-controls="editor">ソース</button><button id="edit-preview-tab" class="tab" type="button" role="tab" aria-selected="false" aria-controls="input-preview">プレビュー</button><span class="tab-hint">Tabキーで切り替え</span></div>
+<div id="drop-area"><textarea id="editor" aria-label="入力文書のソース" spellcheck="false" placeholder="# 見出し&#10;&#10;ここにMarkdownを入力"></textarea><article id="input-preview" class="document editor-preview" aria-label="入力文書のプレビュー" tabindex="0" hidden></article><div id="docx-input" class="file-empty" hidden><span class="file-icon" aria-hidden="true">W</span><strong id="docx-name">Wordファイルを選択</strong><span id="docx-size">.docxをここにドロップ</span><button id="choose-docx" class="secondary">ファイルを開く</button></div></div>
 <div class="pane-footer"><span id="input-meta">0 文字</span><button id="clear" class="quiet small">クリア</button></div></div>
 <div class="pane output-pane"><div class="pane-toolbar"><div class="tabs" role="tablist" aria-label="結果の表示"><button id="preview-tab" class="tab active" role="tab" aria-selected="true">プレビュー</button><button id="source-tab" class="tab" role="tab" aria-selected="false" disabled>ソース</button></div><button id="copy" class="quiet small" disabled>コピー</button></div>
-<div class="result-area"><div id="empty" class="empty"><div class="paper-icon" aria-hidden="true"><span></span><span></span><span></span></div><p>変換結果</p><span>入力して「変換」を押してください</span></div><article id="preview" class="document" hidden></article><textarea id="source" aria-label="変換結果のソース" readonly hidden></textarea></div>
+<div class="result-area"><div id="empty" class="empty"><div class="paper-icon" aria-hidden="true"><span></span><span></span><span></span></div><p>変換結果</p><span>入力するとプレビューが自動更新されます</span></div><article id="preview" class="document" hidden></article><textarea id="source" aria-label="変換結果のソース" readonly hidden></textarea></div>
 <div class="pane-footer"><span id="result-meta">—</span><button id="download" class="download" disabled>ダウンロード <span aria-hidden="true">↓</span></button></div></div>
 </section>
-<div id="status" role="status" aria-live="polite">エンジンを準備中…</div>
+<div id="status" role="status" aria-live="polite">読み込み中…</div>
 <details id="warnings" class="warnings" hidden><summary>変換時の注意</summary><pre id="warning-text"></pre></details>
-<details class="options"><summary>オプション</summary><div class="options-content"><div><button id="add-resources" class="secondary">画像・関連ファイルを追加</button><span id="resource-count">未選択</span><button id="remove-resources" class="quiet small" hidden>解除</button><p>文書内の相対パスとファイル名を一致させてください。フォルダを含む場合はZIPでも追加できます。</p></div><div><button id="add-reference" class="secondary">Wordのスタイルを指定</button><span id="reference-name">標準</span><button id="remove-reference" class="quiet small" hidden>解除</button><p>見出しや本文のスタイルを定義した.docxを指定できます。</p></div><label class="checkbox"><input type="checkbox" id="standalone" checked>TeXにプリアンブルを含める（LuaLaTeX・日本語）</label></div></details>
+<details class="options"><summary>オプション</summary><div class="options-content"><div><button id="add-resources" class="secondary">画像・関連ファイルを追加</button><span id="resource-count">未選択</span><button id="remove-resources" class="quiet small" hidden>解除</button><p>文書内の相対パスとファイル名を一致させてください。フォルダを含む場合はZIPでも追加できます。</p></div><div><button id="add-reference" class="secondary">Wordのスタイルを指定（未対応）</button><span id="reference-name">標準</span><button id="remove-reference" class="quiet small" hidden>解除</button><p>見出しや本文のスタイルを定義した.docxを指定できます。</p></div><label class="checkbox"><input type="checkbox" id="standalone" checked>TeXにプリアンブルを含める（LuaLaTeX・日本語）</label></div></details>
 <footer><span>.docx · .md · .tex</span><a href="./NOTICE.txt" target="_blank" rel="noopener">ライセンス</a></footer>
 </main>
 <input id="file" type="file" accept=".md,.markdown,.txt,.tex,.latex,.docx" hidden><input id="resources" type="file" multiple hidden><input id="reference" type="file" accept=".docx" hidden>
-<dialog id="help-dialog"><div class="dialog-top"><h2>対応表</h2><button id="close-help" class="quiet" aria-label="閉じる">✕</button></div><div class="table-wrap"><table><thead><tr><th>Markdown</th><th>Word</th><th>TeX</th></tr></thead><tbody>
-<tr><td><code># ～ ######</code></td><td>見出し1～6</td><td><code>\section</code> など</td></tr><tr><td><code>**太字** / *斜体*</code></td><td>太字 / 斜体</td><td><code>\textbf / \emph</code></td></tr><tr><td><code>~~取消線~~</code></td><td>取り消し線</td><td><code>\sout</code></td></tr><tr><td><code>- 項目 / 1. 項目</code></td><td>箇条書き / 段落番号</td><td><code>itemize / enumerate</code></td></tr><tr><td><code>- [x] 項目</code></td><td>チェック付きのリスト</td><td>チェック付きのリスト</td></tr><tr><td><code>&gt; 引用</code></td><td>引用</td><td><code>quote</code></td></tr><tr><td><code>`コード` / ```</code></td><td>等幅文字 / コード段落</td><td><code>\texttt / verbatim</code> など</td></tr><tr><td>パイプ区切りの表</td><td>表</td><td><code>longtable</code> など</td></tr><tr><td><code>[文字](URL)</code></td><td>ハイパーリンク</td><td><code>\href</code></td></tr><tr><td><code>![説明](image.png)</code></td><td>埋め込み画像</td><td><code>\includegraphics</code></td></tr><tr><td><code>[^1]</code></td><td>脚注</td><td><code>\footnote</code></td></tr><tr><td><code>$式$ / $$式$$</code></td><td>編集可能な数式</td><td>行内数式 / 別行立て数式</td></tr><tr><td><code>---</code></td><td>区切り</td><td>水平線</td></tr>
-</tbody></table></div><p>文書の構造を変換します。改ページ・余白・複雑な表・独自マクロ・一部の数式は完全には再現できません。プレビューは文書内容の確認用です。</p><p>画像を含むMarkdown・TeXはZIPで保存します。Wordの旧形式（.doc）は対象外です。</p></dialog>
-<script type="module" src="./app.js"></script>
+<dialog id="help-dialog"><div class="dialog-top"><h2>相互変換の対応表</h2><button id="close-help" class="quiet" aria-label="閉じる">✕</button></div>
+<p>「基本対応」はMarkdown・Word・TeX間で基本的な書式を読み書きできるものです。複雑な組合せやWord固有の装飾まで完全再現する意味ではありません。</p>
+<div class="table-wrap"><table><thead><tr><th>表現</th><th>Markdown</th><th>Word</th><th>TeX</th><th>状態</th></tr></thead><tbody>
+<tr><td>見出し1～5</td><td><code># 見出し</code></td><td>見出しスタイル</td><td><code>\section</code> など</td><td>基本対応</td></tr>
+<tr><td>段落・太字・斜体</td><td><code>**太字**</code> / <code>*斜体*</code></td><td>文字書式</td><td><code>\textbf</code> / <code>\emph</code></td><td>基本対応</td></tr>
+<tr><td>取り消し線</td><td><code>~~文字~~</code></td><td>取り消し線</td><td><code>\sout</code></td><td>基本対応</td></tr>
+<tr><td>下線 <small>追加</small></td><td><code>&lt;u&gt;文字&lt;/u&gt;</code></td><td>下線</td><td><code>\underline</code></td><td>基本対応</td></tr>
+<tr><td>蛍光マーカー <small>追加</small></td><td><code>==文字==</code></td><td>黄色マーカー</td><td><code>\colorbox{yellow}{...}</code></td><td>基本対応</td></tr>
+<tr><td>上付き・下付き <small>追加</small></td><td><code>&lt;sup&gt;</code> / <code>&lt;sub&gt;</code></td><td>文字位置</td><td><code>\textsuperscript</code> / <code>\textsubscript</code></td><td>基本対応</td></tr>
+<tr><td>箇条書き・番号付き</td><td><code>- 項目</code> / <code>1. 項目</code></td><td>リスト</td><td><code>itemize</code> / <code>enumerate</code></td><td>基本対応（単層）</td></tr>
+<tr><td>チェックリスト <small>改善</small></td><td><code>- [x] 項目</code></td><td>☑ などの文字</td><td>☑ などの文字</td><td>部分対応（記号）</td></tr>
+<tr><td>引用</td><td><code>&gt; 引用</code></td><td>引用スタイル</td><td><code>quote</code></td><td>基本対応</td></tr>
+<tr><td>行内・複数行コード <small>改善</small></td><td>バッククォート / コードフェンス</td><td>コード書式 / 段落</td><td><code>\texttt</code> / <code>verbatim</code></td><td>基本対応（単純なコード）</td></tr>
+<tr><td>表</td><td>パイプ区切り</td><td>単純な表</td><td><code>tabular</code></td><td>基本対応（結合なし）</td></tr>
+<tr><td>リンク</td><td><code>[文字](URL)</code></td><td>ハイパーリンク</td><td><code>\href</code></td><td>基本対応</td></tr>
+<tr><td>水平線 <small>修正</small></td><td><code>---</code></td><td>罫線付き段落</td><td><code>\hrule</code></td><td>基本対応（明示した場合のみ）</td></tr>
+<tr><td>画像</td><td><code>![説明](画像.png)</code></td><td>埋め込み画像</td><td><code>\includegraphics</code></td><td>部分対応（ファイル別途）</td></tr>
+<tr><td>数式</td><td><code>$...$</code> / <code>$$...$$</code></td><td>数式の文字列</td><td>数式構文</td><td>部分対応（WordのOMML不可）</td></tr>
+<tr><td>脚注 / 結合セル / 段組み</td><td>—</td><td>—</td><td>—</td><td>未対応</td></tr>
+</tbody></table></div>
+<p>新しい書式は単純な文字列で使用してください（装飾の入れ子は限定的です）。Wordの複雑なレイアウトや既存の脚注・数式は完全には変換できません。<a href="./SUPPORTED_FEATURES.md" target="_blank" rel="noopener">詳細な対応表（Markdownファイル）</a>も同梱しています。</p>
+</dialog>
+<script defer src="./engine-offline.js"></script>
+<script defer src="./app-offline.js"></script>
 </body></html>

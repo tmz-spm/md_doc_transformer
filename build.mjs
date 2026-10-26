@@ -1,12 +1,12 @@
-import { build } from 'esbuild';
-import { mkdir, readFile, writeFile, cp } from 'node:fs/promises';
-import { gzipSync } from 'node:zlib';
-await mkdir('dist', { recursive: true });
-await build({entryPoints:['app.js','worker.js'],outdir:'dist',bundle:true,format:'esm',minify:true,target:'es2022'});
-for(const name of ['index.html','style.css']) await cp(name,`dist/${name}`);
-await cp('node_modules/katex/dist/katex.min.css','dist/katex.min.css');
-await cp('node_modules/katex/dist/fonts','dist/fonts',{recursive:true});
-await writeFile('dist/pandoc.wasm.gz',gzipSync(await readFile('node_modules/pandoc-wasm/src/pandoc.wasm'),{level:9}));
-await cp('NOTICE.txt','dist/NOTICE.txt');
-await cp('PANDOC-WRAPPER-LICENSE.txt','dist/PANDOC-WRAPPER-LICENSE.txt');
-console.log('Built document converter.');
+import { cp, mkdir, rm } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
+const root = new URL('./', import.meta.url);
+const dist = new URL('dist/', root);
+// Only remove this script's fixed output directory, never a caller-supplied path.
+await rm(dist, { recursive: true, force: true });
+await mkdir(dist, { recursive: true });
+for (const name of ['index.html', 'style.css', 'engine-offline.js', 'app-offline.js',
+  'README.txt', 'SUPPORTED_FEATURES.md', 'AUDIT_REPORT.md', 'NOTICE.txt']) {
+  await cp(new URL(name, root), new URL(name, dist));
+}
+console.log(`Built offline converter: ${fileURLToPath(dist)}`);
