@@ -24,12 +24,46 @@
     check(C.blocksToMarkdown(back).includes('# 日本語見出し'), 'TeX → Markdown');
     check(C.blocksToMarkdown((await C.docxRead(await C.buildDocx(back, {}))).blocks).includes('日本語見出し'), 'TeX → Word');
   });
-  await test('画像の埋め込みとWordからの取り出し', async () => {
-    const image = new Blob([Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6nVAAAAAASUVORK5CYII='), c => c.charCodeAt(0))], { type: 'image/png' });
-    const doc = await C.buildDocx(C.mdBlocks('![画像](pixel.png)'), { 'pixel.png': image });
-    const back = await C.docxRead(doc);
-    check(Object.keys(back.resources).length === 1, '画像取り出し');
-    check(C.blocksToMarkdown(back.blocks).includes('!['), '画像記法');
+  const pictureCanvas=document.createElement('canvas');
+  pictureCanvas.width=120;
+  pictureCanvas.height=30;
+  const pictureContext=pictureCanvas.getContext('2d');
+  pictureContext.fillStyle='#276553';
+  pictureContext.fillRect(0,0,120,30);
+  const picture=await new Promise(resolve=>pictureCanvas.toBlob(resolve,'image/png'));
+  const imagePath='assets/図_1 (横長).png';
+  const imageSource=String.raw`前 ![説明 \[図\]](<${imagePath}>) 後`;
+  await test('画像: 縦横比・代替テキスト・画像パスのWord往復', async () => {
+    const attached={ [imagePath]:picture };
+    const input=C.mdBlocks(imageSource);
+    const doc=await C.buildDocx(input,attached);
+    const back=await C.docxRead(doc);
+    const files=await C.zipRead(doc);
+    const xml=new DOMParser().parseFromString(new TextDecoder().decode(files['word/document.xml']),'application/xml');
+    const extent=xml.getElementsByTagNameNS('*','extent')[0];
+    check(extent && Number(extent.getAttribute('cx'))===4*Number(extent.getAttribute('cy')),'Word画像の縦横比');
+    check(Object.keys(back.resources).length===1,'画像取り出し');
+    const host=document.createElement('div'), urls=[];
+    C.preview(back.blocks,host,back.resources,urls);
+    const img=host.querySelector('img');
+    await img.decode();
+    check(img.alt==='説明 [図]'&&img.naturalWidth===120,'代替テキストと画像データ');
+    check(host.textContent==='前  後','画像の前後の本文');
+    urls.forEach(url=>URL.revokeObjectURL(url));
+    const tex=C.toTex(input,true,attached);
+    check(tex.includes('{'+imagePath+'}'),'TeXの画像パス');
+    check(C.imageReferences(C.fromTex(tex))[0]?.href===imagePath,'TeXから同じ画像パスを読み直せる');
+    const encoded=C.mdBlocks('![図]('+encodeURI(imagePath)+')');
+    check(C.localImage(C.imageReferences(encoded)[0]?.href,attached)?.file===picture,'URLエンコードされたファイル名');
+  });
+  await test('画像: 未添付や破損した画像だけを文字列として残す', async () => {
+    const warnings=[];
+    const input=C.mdBlocks('![なし](../missing.png)\n\n![破損](bad.png)\n\n![正常](ok.png)');
+    const doc=await C.buildDocx(input,{'bad.png':new Blob(['broken'],{type:'image/png'}),'ok.png':picture},warnings);
+    const files=await C.zipRead(doc);
+    const xml=new TextDecoder().decode(files['word/document.xml']);
+    check(warnings.length===2&&Object.keys(files).filter(path=>path.startsWith('word/media/')).length===1,'正常画像の変換を続ける');
+    check(xml.includes('![なし](../missing.png)')&&xml.includes('![破損](bad.png)'),'元の画像記法');
   });
   await test('見出し・引用・未提供画像・任意HTMLのプレビュー', () => {
     const host = document.createElement('div');
@@ -170,6 +204,117 @@
     $('editor').value += '\n新しい本文'; $('editor').dispatchEvent(new win.Event('input'));
     check($('download').disabled, '古い結果を保存しない');
   });
+  function downloadResult(){
+    let downloaded;
+    const originalClick=win.HTMLAnchorElement.prototype.click;
+    const originalCreate=win.URL.createObjectURL;
+    try {
+      win.HTMLAnchorElement.prototype.click=()=>{};
+      win.URL.createObjectURL=blob=>{downloaded=blob;return originalCreate.call(win.URL,blob);};
+      $('download').click();
+    } finally {
+      win.HTMLAnchorElement.prototype.click=originalClick;
+      win.URL.createObjectURL=originalCreate;
+    }
+    return downloaded;
+  }
+  await test('UI: Word画像のTeX ZIP保存と入力への引き継ぎ', async () => {
+    const word=await C.buildDocx(C.mdBlocks(imageSource),{[imagePath]:picture});
+    await $('file').onchange({target:{files:[new win.File([word],'picture.docx')],value:''}});
+    await $('resources').onchange({target:{files:[new win.File([picture],'unused.png')],value:''}});
+    $('to').value='latex';
+    $('to').dispatchEvent(new win.Event('change'));
+    await $('convert').onclick();
+    const image=$('preview').querySelector('img');
+    check(image&&!$('download').disabled,'TeXの出力プレビュー');
+    await image.decode();
+    const archive=downloadResult();
+    const entries=await C.zipRead(archive);
+    check(Object.keys(entries).length===2&&entries['picture.tex']&&!entries['unused.png'],'使用した画像だけZIPに含める');
+    const importedImage=Object.keys(entries).find(key=>key.endsWith('.png'));
+    check(importedImage&&new TextDecoder().decode(entries['picture.tex']).includes(importedImage),'TeXの参照先を同梱');
+    $('swap').click();
+    await wait(140);
+    const swapped=$('input-preview').querySelector('img');
+    check(swapped,'入出力の入れ替え後も画像を保持');
+    await swapped.decode();
+  });
+  const imageBytes=new Uint8Array(await picture.arrayBuffer());
+  const gifBytes=Uint8Array.from(atob('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'),c=>c.charCodeAt(0));
+  const matrixBodyPath='assets/図_100% (横長).png';
+  const texBodyPath=matrixBodyPath.replace('%',String.raw`\%`);
+  const tableImagePath='assets/表の図 (2).gif';
+  const matrixAssets={[matrixBodyPath]:picture,[tableImagePath]:new Blob([gifBytes],{type:'image/gif'})};
+  const matrixMarkdown=String.raw`![本文](<${matrixBodyPath}> "画像タイトル")
+
+<table>
+<tr><td><img src="${tableImagePath}" alt="表 [図]"></td></tr>
+</table>
+`;
+  const matrixTex=String.raw`\includegraphics{${texBodyPath}}
+
+\begin{tabular}{l}
+\includegraphics[width=2cm]{${tableImagePath}} \\
+\end{tabular}
+`;
+  const matrixFiles={
+    markdown:new win.File([matrixMarkdown],'pictures.md'),
+    latex:new win.File([matrixTex],'pictures.tex'),
+    docx:new win.File([await C.buildDocx(C.mdBlocks(matrixMarkdown),matrixAssets)],'pictures.docx')
+  };
+  const matrixZip=new win.File([C.zipWrite({[matrixBodyPath]:imageBytes,[tableImagePath]:gifBytes})],'images.zip');
+  const labels={markdown:'Markdown',docx:'Word',latex:'TeX'};
+  const extensions={markdown:'md',docx:'docx',latex:'tex'};
+  async function assertPictures(host,label){
+    const bodyImages=host.querySelectorAll('p img'), tableImages=host.querySelectorAll('td img');
+    check(bodyImages.length===1&&tableImages.length===1,label+'の本文と表に各1枚');
+    await Promise.all([bodyImages[0].decode(),tableImages[0].decode()]);
+    check(bodyImages[0].naturalWidth===120&&tableImages[0].naturalWidth===1,label+'の画像データを表示');
+  }
+  for(const from of Object.keys(matrixFiles))for(const to of Object.keys(matrixFiles)){
+    if(from===to)continue;
+    await test(`画像付き文書: ${labels[from]} → ${labels[to]}（本文・表・保存後の再読込）`, async () => {
+      $('remove-resources').onclick();
+      await $('file').onchange({target:{files:[matrixFiles[from]],value:''}});
+      if(from!=='docx')await $('resources').onchange({target:{files:[matrixZip],value:''}});
+      $('to').value=to;
+      $('to').dispatchEvent(new win.Event('change'));
+      await $('convert').onclick();
+      check(!$('download').disabled,'変換成功');
+      await assertPictures($('preview'),'変換結果');
+      const downloaded=downloadResult();
+      const entries=await C.zipRead(downloaded);
+      if(to==='docx'){
+        check(Object.keys(entries).filter(path=>path.startsWith('word/media/')).length===2,'Wordに画像2枚を埋め込む');
+        const reopened=await C.docxRead(downloaded),host=document.createElement('div'),urls=[];
+        try {
+          C.preview(reopened.blocks,host,reopened.resources,urls);
+          await assertPictures(host,'保存したWord');
+        } finally { urls.forEach(url=>URL.revokeObjectURL(url)); }
+      }else{
+        const name='pictures.'+extensions[to];
+        check(Object.keys(entries).length===3&&entries[name],'文書と画像2枚を同梱');
+        if(to==='latex'){
+          const rasters=Object.entries(entries).filter(([path])=>path.startsWith('media/tex-image-')&&path.endsWith('.png'));
+          const pictures=Object.entries(entries).filter(([path])=>path.endsWith('.png'));
+          check(pictures.length===2&&pictures.every(([,data])=>data[0]===0x89&&data[1]===0x50),'TeXにPNG画像を2枚同梱');
+          check(rasters.length===(from==='docx'?1:2),'GIFをPNGへ変換し、%を含む画像名をTeX向けに置換');
+          const texText=new TextDecoder().decode(entries[name]);
+          check(rasters.every(([path])=>texText.includes(path)),'TeXから同梱したPNGを参照');
+        }
+        if(to==='markdown'){
+          const template=document.createElement('template');
+          template.innerHTML=new TextDecoder().decode(entries[name]);
+          check(template.content.querySelector('td img')?.getAttribute('src'),'MarkdownのHTML表に画像タグを出力');
+        }
+        $('remove-resources').onclick();
+        await $('file').onchange({target:{files:[new win.File([entries[name]],name)],value:''}});
+        await $('resources').onchange({target:{files:[new win.File([downloaded],'saved-images.zip')],value:''}});
+        $('edit-preview-tab').click();
+        await assertPictures($('input-preview'),'保存した文書');
+      }
+    });
+  }
   document.getElementById('summary').textContent = `${failed ? 'FAIL' : 'PASS'}: ${passed} passed, ${failed} failed`;
   document.title = document.getElementById('summary').textContent;
 })();
