@@ -85,8 +85,11 @@
       if(/^\s*<table(?:\s[^>]*)?>\s*$/i.test(s)){
         const a=[s];i++;while(i<lines.length){const line=lines[i++];a.push(line);if(/<\/table\s*>/i.test(line))break;}
         if(a.some(line=>/<\/table\s*>/i.test(line))){
-          const doc=new DOMParser().parseFromString(a.join('\n'),'text/html'),table=doc.querySelector('table');
-          if(table){const rows=Array.from(table.querySelectorAll('tr')).map(tr=>Array.from(tr.children).filter(el=>el.tagName==='TD'||el.tagName==='TH').map(el=>el.textContent));
+          // Template contents stay inert. Only text and image references are read.
+          const template=document.createElement('template');
+          template.innerHTML=a.join('\n');
+          const table=template.content.querySelector('table');
+          if(table){const rows=Array.from(table.querySelectorAll('tr')).map(tr=>Array.from(tr.children).filter(el=>el.tagName==='TD'||el.tagName==='TH').map(readHtmlTableCell));
             b.push({type:'table',rows,hasHeader:!!table.querySelector('tr:first-child th'),borders:table.getAttribute('data-borders')==='yes'});continue;}
         }
         b.push({type:'p',text:a.join(' ')});continue;
@@ -106,17 +109,19 @@
     return b;
   }
   function blocksToMarkdown(blocks){return blocks.map(b=>{
-    switch(b.type){case 'frontmatter':return b.text;case 'heading':return '#'.repeat(b.level)+' '+b.text;case 'p':return b.text;case 'quote':return '> '+b.text.replaceAll('\n','\n> ');case 'hr':return '---';case 'code':return '```'+(b.lang||'')+'\n'+b.text+'\n```';case 'math':return '$$\n'+b.text+'\n$$';case 'list':return b.items.map((x,i)=>(b.ordered?`${i+1}. `:'- ')+x.replace(/^☐\s+/,'[ ] ').replace(/^☑\s+/,'[x] ')).join('\n');case 'table':return b.hasHeader===false ? '<table'+(b.borders?' data-borders="yes"':'')+'>\n'+b.rows.map(r=>'  <tr>'+r.map(c=>'<td>'+esc(decodeMdEscapes(c))+'</td>').join('')+'</tr>').join('\n')+'\n</table>' : b.rows.map((r,i)=>'| '+r.map(c=>c.replace(/(?<!\\)\|/g,'\\|')).join(' | ')+' |'+(i===0?'\n| '+r.map(()=>'---').join(' | ')+' |':'')).join('\n');default:return '';}
+    switch(b.type){case 'frontmatter':return b.text;case 'heading':return '#'.repeat(b.level)+' '+b.text;case 'p':return b.text;case 'quote':return '> '+b.text.replaceAll('\n','\n> ');case 'hr':return '---';case 'code':return '```'+(b.lang||'')+'\n'+b.text+'\n```';case 'math':return '$$\n'+b.text+'\n$$';case 'list':return b.items.map((x,i)=>(b.ordered?`${i+1}. `:'- ')+x.replace(/^☐\s+/,'[ ] ').replace(/^☑\s+/,'[x] ')).join('\n');case 'table':return b.hasHeader===false ? '<table'+(b.borders?' data-borders="yes"':'')+'>\n'+b.rows.map(r=>'  <tr>'+r.map(c=>'<td>'+writeHtmlTableCell(c)+'</td>').join('')+'</tr>').join('\n')+'\n</table>' : b.rows.map((r,i)=>'| '+r.map(c=>c.replace(/(?<!\\)\|/g,'\\|')).join(' | ')+' |'+(i===0?'\n| '+r.map(()=>'---').join(' | ')+' |':'')).join('\n');default:return '';}
   }).join('\n\n').trim()+'\n';}
   // Word plain text must not turn into Markdown syntax during a round trip.
   const escapeMdLiteral = text => String(text).replace(/([\\`*_{}\[\]()#+\-.!|>$=~<>])/g,'\\$1');
   const decodeMdEscapes = text => String(text).replace(/\\([\\`*_{}\[\]()#+\-.!|>$=~<>])/g,'$1');
+  const relativeImagePath = href => !!href?.trim() &&
+    !/^(?:[a-z][a-z\d+.-]*:|[/\\])/i.test(href.trim()) && !/[\u0000-\u001f\u007f]/.test(href);
   function localImage(href, resources){
-    if(!href || /^(?:[a-z][a-z\d+.-]*:|[/\\])/i.test(href))return null;
+    if(!relativeImagePath(href))return null;
     const candidates=[href];
     try { candidates.push(decodeURIComponent(href)); } catch { /* A literal % is also valid in a file name. */ }
     for(const candidate of candidates){
-      if(/^(?:[a-z][a-z\d+.-]*:|[/\\])/i.test(candidate))continue;
+      if(!relativeImagePath(candidate))continue;
       try {
         const path=normalize(candidate);
         if(Object.hasOwn(resources,path))return {path,file:resources[path]};
@@ -129,6 +134,22 @@
     const target=/[\s()<>]/.test(path)?'<'+path.replaceAll('<','%3C').replaceAll('>','%3E')+'>':path;
     return '!['+label+']('+target+')';
   }
+  function readHtmlTableCell(cell){
+    return Array.from(cell.childNodes).map(node=>{
+      if(node.nodeName!=='IMG')return node.textContent;
+      const src=node.getAttribute('src');
+      const alt=node.getAttribute('alt')??'';
+      return relativeImagePath(src)?markdownImage(alt,src):escapeMdLiteral(alt);
+    }).join('');
+  }
+  function writeHtmlTableCell(text){
+    return inlineParts(text).map(part=>{
+      if(part.type!=='image'||!relativeImagePath(part.href)){
+        return esc(part.markup?decodeMdEscapes(part.markup):part.text);
+      }
+      return '<img src="'+esc(part.href)+'" alt="'+esc(part.text)+'">';
+    }).join('');
+  }
   function imageReferences(blocks){
     const references=[];
     for(const block of blocks){
@@ -140,7 +161,7 @@
   }
   // A deliberately small, safe subset of Markdown inline syntax; arbitrary HTML is not executed.
   function inlineParts(s){
-    const re = /(<u>[^\n]+?<\/u>|<sup>[^\n]+?<\/sup>|<sub>[^\n]+?<\/sub>|==[^=\n]+==|!\[(?:\\[\\\[\]]|[^\]\r\n])*\]\((?:<[^>\r\n]*>|(?:\\[()]|\([^()\r\n]*\)|[^()\r\n])*)\)|\[[^\]]*\]\([^)\r\n]*\)|\*\*[^*\n]+\*\*|__[^_\n]+__|~~[^~\n]+~~|\*[^*\n]+\*|(?<![\w])_[^_\n]+_(?![\w])|`[^`\n]+`|\$[^$\n]+\$)/gi;
+    const re = /(<u>[^\n]+?<\/u>|<sup>[^\n]+?<\/sup>|<sub>[^\n]+?<\/sub>|==[^=\n]+==|!\[(?:\\[\\\[\]]|[^\]\r\n])*\]\((?:<[^>\r\n]*>|(?:\\[()]|\([^()\r\n]*\)|[^()\r\n])*)(?:[ \t]+(?:"[^"\r\n]*"|'[^'\r\n]*'))?\)|\[[^\]]*\]\([^)\r\n]*\)|\*\*[^*\n]+\*\*|__[^_\n]+__|~~[^~\n]+~~|\*[^*\n]+\*|(?<![\w])_[^_\n]+_(?![\w])|`[^`\n]+`|\$[^$\n]+\$)/gi;
     const parts=[]; let prev=0,m;
     while((m=re.exec(s))){
       // Ignore markup escaped with an odd number of backslashes.
@@ -150,7 +171,7 @@
       const x=m[0];let type='text',value=x,href='';
       if(x.startsWith('![')){
         const image=x.match(/^!\[((?:\\[\\\[\]]|[^\]])*)\]\(([\s\S]*)\)$/);
-        const target=image[2].trim();
+        const target=image[2].trim().replace(/[ \t]+(?:"[^"\r\n]*"|'[^'\r\n]*')$/,'');
         type='image';
         value=decodeMdEscapes(image[1]);
         href=target.startsWith('<')?target.slice(1,-1):target.replace(/\\([()])/g,'$1');
@@ -171,9 +192,13 @@
     return parts;
   }
   function texEscape(s){return s.replace(/\\/g,'\\textbackslash{}').replace(/([%$&#_{}])/g,'\\$1').replace(/\^/g,'\\textasciicircum{}').replace(/~/g,'\\textasciitilde{}');}
-  function inlineTex(s,resources){return inlineParts(s).map(v=>{const t=texEscape(v.text);switch(v.type){case 'bold':return `\\textbf{${t}}`;case 'italic':return `\\emph{${t}}`;case 'strike':return `\\sout{${t}}`;case 'underline':return `\\underline{${t}}`;case 'highlight':return `\\colorbox{yellow}{${t}}`;case 'sup':return `\\textsuperscript{${t}}`;case 'sub':return `\\textsubscript{${t}}`;case 'code':return `\\texttt{${t}}`;case 'link':return `\\href{${texEscape(v.href)}}{${t}}`;case 'image':return `\\includegraphics[width=.7\\linewidth]{${texEscape(localImage(v.href,resources)?.path??v.href).replace(/\\_/g,'_')}}`;case 'math':return '$'+v.text+'$';default:return t;}}).join('');}
-  function toTex(blocks,standalone=true,resources={}){
-    const convertInline=text=>inlineTex(text,resources);
+  function inlineTex(s,imagePath){return inlineParts(s).map(v=>{const t=texEscape(v.text);switch(v.type){case 'bold':return `\\textbf{${t}}`;case 'italic':return `\\emph{${t}}`;case 'strike':return `\\sout{${t}}`;case 'underline':return `\\underline{${t}}`;case 'highlight':return `\\colorbox{yellow}{${t}}`;case 'sup':return `\\textsuperscript{${t}}`;case 'sub':return `\\textsubscript{${t}}`;case 'code':return `\\texttt{${t}}`;case 'link':return `\\href{${texEscape(v.href)}}{${t}}`;case 'image':return `\\includegraphics[width=.7\\linewidth]{${texEscape(imagePath(v.href)).replace(/\\_/g,'_')}}`;case 'math':return '$'+v.text+'$';default:return t;}}).join('');}
+  function toTex(blocks,standalone=true,resources={},renamed=new Map()){
+    const imagePath=href=>{
+      const image=localImage(href,resources);
+      return image?(renamed.get(image.path)??image.path):href;
+    };
+    const convertInline=text=>inlineTex(text,imagePath);
     const body=blocks.map(b=>{
     switch(b.type){case 'heading':return `\\${['section','subsection','subsubsection','paragraph','subparagraph','subparagraph'][b.level-1]}{${convertInline(b.text)}}`;
       case 'p':return convertInline(b.text);case 'hr':return '\\hrule';case 'math':return '\\[\n'+b.text+'\n\\]';case 'code':return '\\begin{verbatim}\n'+b.text+'\n\\end{verbatim}';case 'quote':return '\\begin{quote}\n'+convertInline(b.text)+'\n\\end{quote}';
@@ -184,6 +209,46 @@
   }).join('\n\n');
     if(!standalone)return body+'\n';
     return '\\documentclass{ltjsarticle}\n\\usepackage{amsmath,amssymb}\n\\usepackage{graphicx}\n\\usepackage{hyperref}\n\\usepackage{xcolor}\n\\usepackage[normalem]{ulem}\n\\begin{document}\n'+body+'\n\\end{document}\n';
+  }
+  async function buildTex(blocks,standalone,resources={},warnings=[]){
+    const files={...resources};
+    const renamed=new Map();
+    let nextId=0;
+    for(const {href} of imageReferences(blocks)){
+      const image=localImage(href,resources);
+      if(!image || renamed.has(image.path))continue;
+      const suffix=ext(image.path);
+      const isGif=suffix==='gif';
+      // These characters are interpreted by TeX even inside an image path.
+      if(!isGif&&(!/^[a-z0-9]+$/.test(suffix)||!/[%$&#^~{}"]/.test(image.path)))continue;
+      renamed.set(image.path,image.path);
+      let file=image.file;
+      if(isGif){
+        try {
+          const bitmap=await createImageBitmap(file);
+          try {
+            const canvas=document.createElement('canvas');
+            canvas.width=bitmap.width;
+            canvas.height=bitmap.height;
+            canvas.getContext('2d').drawImage(bitmap,0,0);
+            file=await new Promise(resolve=>canvas.toBlob(resolve,'image/png'));
+          } finally {
+            bitmap.close();
+          }
+          if(!file)throw Error('PNGを生成できません');
+        } catch {
+          warnings.push('GIF画像をTeX用のPNGに変換できませんでした: '+href);
+          continue;
+        }
+      }
+      let path;
+      do {
+        path='media/tex-image-'+(++nextId)+'.'+(isGif?'png':suffix);
+      } while(Object.hasOwn(files,path));
+      files[path]=file;
+      renamed.set(image.path,path);
+    }
+    return {text:toTex(blocks,standalone,resources,renamed),resources:files};
   }
   function texInline(s){
     let t=s.replace(/\\href\{([^{}]*)\}\{([^{}]*)\}/g,(_,url,title)=>`[${title}](${url})`)
@@ -216,6 +281,10 @@
     let prefix='\uE000MATH';while(s.includes(prefix))prefix+='X';
     const saved=[];
     const hold=value=>{const token=prefix+saved.length+'\uE001';saved.push([token,value]);return token;};
+    const restore=value=>{
+      for(const [token,text] of saved)value=value.replaceAll(token,()=>text);
+      return value;
+    };
     s=s.replace(/\\begin\{verbatim\}([\s\S]*?)\\end\{verbatim\}/g,(_,v)=>hold('```\n'+v.replace(/^\n|\n$/g,'')+'\n```'));
     s=s.replace(/\\begin\{(equation\*?|align\*?|gather\*?)\}([\s\S]*?)\\end\{\1\}/g,(_,env,v)=>{
       const kind=env.startsWith('align')?'aligned':env.startsWith('gather')?'gathered':null;
@@ -233,12 +302,11 @@
     s=s.replace(/\\begin\{verbatim\}([\s\S]*?)\\end\{verbatim\}/g,(_,v)=>'```\n'+v.trim()+'\n```');
     s=s.replace(/\\\[([\s\S]*?)\\\]/g,(_,v)=>'$$\n'+v.trim()+'\n$$');
     s=s.replace(/\\begin\{tabular\}\{[^}]*\}([\s\S]*?)\\end\{tabular\}/g,(_,v)=>{
-      const bordered=/\\hline\b/.test(v);const rows=v.replace(/\\hline/g,'').split(/\\\\/).map(y=>y.trim()).filter(Boolean).map(y=>y.split(/(?<!\\)&/).map(z=>texInline(z.trim())));
-      if(!rows.length)return '';return blocksToMarkdown([{type:'table',rows,hasHeader:false,borders:bordered}]).trim();
+      const bordered=/\\hline\b/.test(v);const rows=v.replace(/\\hline/g,'').split(/\\\\/).map(y=>y.trim()).filter(Boolean).map(y=>y.split(/(?<!\\)&/).map(z=>restore(texInline(z.trim()))));
+      if(!rows.length)return '';return hold(blocksToMarkdown([{type:'table',rows,hasHeader:false,borders:bordered}]).trim());
     });
     s=s.split('\n').map(texInline).join('\n');
-    for(const [token,value] of saved)s=s.replaceAll(token,()=>value);
-    return mdBlocks(s.trim());
+    return mdBlocks(restore(s).trim());
   }
   async function docxRead(input){
     const z=await zipRead(input,p=>p.startsWith('word/')); if(!z['word/document.xml'])throw Error('Word .docx の本文を読み込めませんでした');
@@ -449,5 +517,5 @@
       }
     }
   }
-  window.OfflineConverter={zipRead,zipWrite,mdBlocks,blocksToMarkdown,toTex,fromTex,docxRead,buildDocx,preview,normalize,localImage,imageReferences};
+  window.OfflineConverter={zipRead,zipWrite,mdBlocks,blocksToMarkdown,toTex,buildTex,fromTex,docxRead,buildDocx,preview,normalize,localImage,imageReferences};
 })();

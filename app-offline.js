@@ -127,7 +127,15 @@ $$
       if(!blocks.length)throw Error('文書に変換可能な内容が見つかりません');
       const name=baseName+'.'+({docx:'docx',markdown:'md',latex:'tex'}[to]);let blob,txt='';
       if(to==='docx')blob=await C.buildDocx(blocks,available,conversionWarnings);
-      else {txt=to==='markdown'?C.blocksToMarkdown(blocks):C.toTex(blocks,$('standalone').checked,available);blob=new Blob([txt],{type:'text/plain;charset=utf-8'});}
+      else {
+        if(to==='markdown')txt=C.blocksToMarkdown(blocks);
+        else{
+          const tex=await C.buildTex(blocks,$('standalone').checked,available,conversionWarnings);
+          txt=tex.text;
+          available=tex.resources;
+        }
+        blob=new Blob([txt],{type:'text/plain;charset=utf-8'});
+      }
       // Preview the actual serialized output, not the original source blocks.
       // This avoids suggesting that a construct survived a conversion when it did not.
       let displayBlocks=blocks,displayResources=available;
