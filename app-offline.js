@@ -83,55 +83,80 @@ $$
     $('editor').placeholder=$('from').value==='latex'?'\\section{見出し}\n\n本文':'# 見出し\n\n本文';
   }
   async function importFile(file){if(busy)return;if(file.size>30*1024*1024)throw Error('入力ファイルは30 MB以下にしてください');const e=file.name.split('.').pop().toLowerCase();if(!['md','markdown','txt','tex','latex','docx'].includes(e))throw Error('.md / .tex / .docx を選んでください');invalidate();inputFile=e==='docx'?file:null;baseName=file.name.replace(/\.[^.]+$/,'').replace(/[^\p{L}\p{N}._-]/gu,'_')||'document';$('from').value=e==='docx'?'docx':['tex','latex'].includes(e)?'latex':'markdown';if(e!=='docx')$('editor').value=await file.text();if($('from').value===$('to').value)$('to').value=$('from').value==='docx'?'markdown':'docx';setInputTab('source');inputChanged();scheduleLivePreview(true);status(`${file.name} を読み込みました`);}
-  async function addResources(files){const next={...resources};for(const file of files){if(file.size>30*1024*1024)throw Error('関連ファイルは30 MB以下です');if(/\.zip$/i.test(file.name)){const items=await C.zipRead(file);for(const [name,bytes] of Object.entries(items))next[C.normalize(name)]=new Blob([bytes]);}else next[C.normalize(file.name)]=file;}resources=next;$('resource-count').textContent=`${Object.keys(resources).length} 件`;$('remove-resources').hidden=!Object.keys(resources).length;invalidate();status('関連ファイルを設定しました');}
+  function updateResourceCount(){
+    const count=Object.keys(resources).length;
+    $('resource-count').textContent=count?`${count} 件`:'未選択';
+    $('remove-resources').hidden=!count;
+  }
+  async function addResources(files){
+    const next={...resources};
+    for(const file of files){
+      if(file.size>30*1024*1024)throw Error('関連ファイルは30 MB以下です');
+      if(/\.zip$/i.test(file.name)){
+        const items=await C.zipRead(file);
+        for(const [name,bytes] of Object.entries(items))next[C.normalize(name)]=new Blob([bytes]);
+      }else next[C.normalize(file.name)]=file;
+    }
+    resources=next;
+    updateResourceCount();
+    invalidate();
+    status('関連ファイルを設定しました');
+  }
   function showTab(source){if(!output)return;$('preview').hidden=source;$('source').hidden=!source;$('preview-tab').classList.toggle('active',!source);$('source-tab').classList.toggle('active',source);$('preview-tab').setAttribute('aria-selected',String(!source));$('source-tab').setAttribute('aria-selected',String(source));}
-  function getNotices(blocks,to,available={}){
+  function getNotices(blocks,to,available,displayBlocks){
     const n=['複雑な書式・脚注・独自マクロは完全には保持されません。'];
     if(blocks.some(x=>x.type==='table'))n.push('表の幅・結合セル・列揃えは元と異なる場合があります。');
     if(blocks.some(x=>x.type==='frontmatter')&&to!=='markdown')n.push('MarkdownのYAMLフロントマターはプレビューに表示せず、Word/TeX本文にも追加しません。');
     if(blocks.some(x=>x.type==='table'&&x.hasHeader!==false)&&to==='latex')n.push('TeXのtabularにはMarkdownの見出し行の意味がありません。TeXから再変換すると見出し扱いは維持されません。');
-    const sourceTexts=blocks.flatMap(b=>[b.text||'',...(b.items||[]),...(b.rows||[]).flat()]);
-    const images=sourceTexts.flatMap(t=>[...t.matchAll(/!\[[^\]]*\]\(([^)]+)\)/g)].map(m=>m[1]));
-    const missing=images.filter(path=>{try{return !available[C.normalize(path)];}catch{return true;}});
-    if(missing.length&&to==='docx')n.push('画像ファイルが見つからないため、画像を捏造せず、元の画像記法をテキストとして残しました: '+[...new Set(missing)].slice(0,5).join('、'));
+    if(to!=='docx'){
+      const missing=C.imageReferences(displayBlocks).filter(({href})=>!C.localImage(href,available));
+      if(missing.length)n.push('画像ファイルが同梱されていません: '+[...new Set(missing.map(({href})=>href))].slice(0,5).join('、'));
+    }
     return n;
   }
-  async function convert(){if(busy)return;let blocks,available={...resources},mathWarnings=[];const from=$('from').value,to=$('to').value;
+  async function convert(){if(busy)return;let blocks,available={...resources},conversionWarnings=[];const from=$('from').value,to=$('to').value;
     if(from==='docx'&&!inputFile){status('Word .docx ファイルを選択してください','error');return;}
     if(from!=='docx'&&!$('editor').value.trim()){status('変換する文書を入力してください','error');return;}
     invalidate();setBusy(true);status('変換中…');
     try{
       // Yield once so the progress label can be rendered.
       await new Promise(resolve=>setTimeout(resolve,0));
-      if(from==='docx'){const imported=await C.docxRead(inputFile);blocks=imported.blocks;mathWarnings.push(...imported.warnings);available={...imported.resources,...available};}
+      if(from==='docx'){const imported=await C.docxRead(inputFile);blocks=imported.blocks;conversionWarnings.push(...imported.warnings);available={...available,...imported.resources};}
       else if(from==='markdown')blocks=C.mdBlocks($('editor').value);
       else blocks=C.fromTex($('editor').value);
       if(!blocks.length)throw Error('文書に変換可能な内容が見つかりません');
       const name=baseName+'.'+({docx:'docx',markdown:'md',latex:'tex'}[to]);let blob,txt='';
-      if(to==='docx')blob=await C.buildDocx(blocks,available,mathWarnings);
-      else {txt=to==='markdown'?C.blocksToMarkdown(blocks):C.toTex(blocks,$('standalone').checked);blob=new Blob([txt],{type:'text/plain;charset=utf-8'});}
-      let archive=null;
-      if(to!=='docx'){
-        const used={};let i=0;
-        for(const [path,file] of Object.entries(available)){
-          if(++i>100)throw Error('関連ファイルが多すぎます');
-          if(path&&(/^media\//.test(path)||txt.includes(path)))used[path]=new Uint8Array(await file.arrayBuffer());
-        }
-        if(Object.keys(used).length){used[name]=new Uint8Array(await blob.arrayBuffer());archive=C.zipWrite(used);}
-      }
+      if(to==='docx')blob=await C.buildDocx(blocks,available,conversionWarnings);
+      else {txt=to==='markdown'?C.blocksToMarkdown(blocks):C.toTex(blocks,$('standalone').checked,available);blob=new Blob([txt],{type:'text/plain;charset=utf-8'});}
       // Preview the actual serialized output, not the original source blocks.
       // This avoids suggesting that a construct survived a conversion when it did not.
       let displayBlocks=blocks,displayResources=available;
       if(to==='docx'){
-        const actual=await C.docxRead(blob);mathWarnings.push(...actual.warnings);
-        displayBlocks=actual.blocks;displayResources={...actual.resources,...available};
+        const actual=await C.docxRead(blob);conversionWarnings.push(...actual.warnings);
+        displayBlocks=actual.blocks;displayResources=actual.resources;
       }else if(to==='markdown')displayBlocks=C.mdBlocks(txt);
       else displayBlocks=C.fromTex(txt);
-      output={blob,txt,name,blocks,resources:available,archive,to};
+      let archive=null;
+      const outputResources={};
+      if(to!=='docx'){
+        for(const {href} of C.imageReferences(displayBlocks)){
+          const image=C.localImage(href,displayResources);
+          if(image)outputResources[image.path]=image.file;
+        }
+        const entries=Object.entries(outputResources);
+        if(entries.length>100)throw Error('関連ファイルが多すぎます');
+        if(entries.length){
+          const files=Object.create(null);
+          for(const [path,file] of entries)files[path]=new Uint8Array(await file.arrayBuffer());
+          files[name]=new Uint8Array(await blob.arrayBuffer());
+          archive=C.zipWrite(files);
+        }
+      }
+      output={blob,txt,name,resources:outputResources,archive};
       C.preview(displayBlocks,$('preview'),displayResources,previewUrls);
       $('source').value=txt;$('empty').hidden=true;$('preview').hidden=false;$('download').disabled=false;$('copy').disabled=to==='docx';$('source-tab').disabled=to==='docx';
       $('result-meta').textContent=`${{docx:'Word .docx',markdown:'Markdown .md',latex:'TeX .tex'}[to]} · ${(blob.size/1024).toFixed(1)} KB${archive?' · 画像などの関連ファイルあり':''}`;
-      const notices=[...new Set([...getNotices(blocks,to,available),...mathWarnings])];$('warnings').hidden=false;$('warning-text').textContent=notices.join('\n\n');
+      const notices=[...new Set([...getNotices(blocks,to,displayResources,displayBlocks),...conversionWarnings])];$('warnings').hidden=false;$('warning-text').textContent=notices.join('\n\n');
       status('変換しました。ダウンロードできます。','success');
     }catch(err){console.error(err);status('変換に失敗しました: '+(err?.message||String(err)),'error');}
     finally{setBusy(false);}
@@ -161,8 +186,24 @@ $$
   $('file').onchange=async e=>{try{if(e.target.files[0])await importFile(e.target.files[0]);}catch(err){status(err.message,'error');}e.target.value='';};
   const area=$('drop-area');for(const evt of ['dragenter','dragover'])area.addEventListener(evt,e=>{e.preventDefault();area.classList.add('drag');});for(const evt of ['dragleave','drop'])area.addEventListener(evt,e=>{e.preventDefault();area.classList.remove('drag');});area.addEventListener('drop',async e=>{try{if(e.dataTransfer.files[0])await importFile(e.dataTransfer.files[0]);}catch(err){status(err.message,'error');}});
   $('add-resources').onclick=()=>$('resources').click();$('resources').onchange=async e=>{try{await addResources(e.target.files);}catch(err){status(err.message,'error');}e.target.value='';};
-  $('remove-resources').onclick=()=>{resources={};$('resource-count').textContent='未選択';$('remove-resources').hidden=true;invalidate();};
-  $('swap').onclick=()=>{if(!output)return status('先に一度変換してください','error');const oldFrom=$('from').value,oldTo=$('to').value;$('from').value=oldTo;$('to').value=oldFrom;if(oldTo==='docx'){inputFile=new File([output.blob],output.name,{type:'application/vnd.openxmlformats-officedocument.wordprocessingml.document'});}else{inputFile=null;$('editor').value=output.txt;}invalidate();inputChanged();status('変換結果を入力に移しました');};
+  $('remove-resources').onclick=()=>{resources={};updateResourceCount();invalidate();};
+  $('swap').onclick=()=>{
+    if(!output)return status('先に一度変換してください','error');
+    const oldFrom=$('from').value,oldTo=$('to').value;
+    $('from').value=oldTo;
+    $('to').value=oldFrom;
+    if(oldTo==='docx'){
+      inputFile=new File([output.blob],output.name,{type:'application/vnd.openxmlformats-officedocument.wordprocessingml.document'});
+    }else{
+      inputFile=null;
+      $('editor').value=output.txt;
+      resources={...resources,...output.resources};
+      updateResourceCount();
+    }
+    invalidate();
+    inputChanged();
+    status('変換結果を入力に移しました');
+  };
   $('help').onclick=()=>$('help-dialog').showModal();$('close-help').onclick=()=>$('help-dialog').close();
   // The full Pandoc feature set, including a reference Word template, is not provided by this dependency-free build.
   $('add-reference').disabled=true;$('add-reference').title='簡易オフライン版では未対応です';$('reference-name').textContent='未対応（簡易版）';$('remove-reference').hidden=true;

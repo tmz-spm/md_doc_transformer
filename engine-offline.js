@@ -6,6 +6,7 @@
   const R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
   const P = 'http://schemas.openxmlformats.org/package/2006/relationships';
   const esc = s => String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&apos;');
+  const wordImageTypes = {png:'image/png', jpg:'image/jpeg', jpeg:'image/jpeg', gif:'image/gif'};
   const ext = s => String(s).split('.').pop().toLowerCase();
   function normalize(p) { const arr=[]; for (const s of p.replaceAll('\\','/').split('/')) { if(!s || s==='.')continue; if(s==='..') { if(!arr.length) throw Error('不正なファイルパスです'); arr.pop(); } else arr.push(s); } return arr.join('/'); }
   function getChildren(node, tag){return Array.from(node?.children||[]).filter(x=>x.localName===tag);}
@@ -110,9 +111,36 @@
   // Word plain text must not turn into Markdown syntax during a round trip.
   const escapeMdLiteral = text => String(text).replace(/([\\`*_{}\[\]()#+\-.!|>$=~<>])/g,'\\$1');
   const decodeMdEscapes = text => String(text).replace(/\\([\\`*_{}\[\]()#+\-.!|>$=~<>])/g,'$1');
+  function localImage(href, resources){
+    if(!href || /^(?:[a-z][a-z\d+.-]*:|[/\\])/i.test(href))return null;
+    const candidates=[href];
+    try { candidates.push(decodeURIComponent(href)); } catch { /* A literal % is also valid in a file name. */ }
+    for(const candidate of candidates){
+      if(/^(?:[a-z][a-z\d+.-]*:|[/\\])/i.test(candidate))continue;
+      try {
+        const path=normalize(candidate);
+        if(Object.hasOwn(resources,path))return {path,file:resources[path]};
+      } catch { /* The reference points outside the supplied files. */ }
+    }
+    return null;
+  }
+  function markdownImage(alt,path){
+    const label=alt.replace(/[\r\n]+/g,' ').replace(/[\\[\]]/g,'\\$&');
+    const target=/[\s()<>]/.test(path)?'<'+path.replaceAll('<','%3C').replaceAll('>','%3E')+'>':path;
+    return '!['+label+']('+target+')';
+  }
+  function imageReferences(blocks){
+    const references=[];
+    for(const block of blocks){
+      const texts=block.type==='list'?block.items:block.type==='table'?block.rows.flat():
+        ['p','quote','heading'].includes(block.type)?[block.text]:[];
+      for(const line of texts)for(const part of inlineParts(line))if(part.type==='image')references.push(part);
+    }
+    return references;
+  }
   // A deliberately small, safe subset of Markdown inline syntax; arbitrary HTML is not executed.
   function inlineParts(s){
-    const re = /(<u>[^\n]+?<\/u>|<sup>[^\n]+?<\/sup>|<sub>[^\n]+?<\/sub>|==[^=\n]+==|!?\[[^\]]*\]\([^)]*\)|\*\*[^*\n]+\*\*|__[^_\n]+__|~~[^~\n]+~~|\*[^*\n]+\*|(?<![\w])_[^_\n]+_(?![\w])|`[^`\n]+`|\$[^$\n]+\$)/gi;
+    const re = /(<u>[^\n]+?<\/u>|<sup>[^\n]+?<\/sup>|<sub>[^\n]+?<\/sub>|==[^=\n]+==|!\[(?:\\[\\\[\]]|[^\]\r\n])*\]\((?:<[^>\r\n]*>|(?:\\[()]|\([^()\r\n]*\)|[^()\r\n])*)\)|\[[^\]]*\]\([^)\r\n]*\)|\*\*[^*\n]+\*\*|__[^_\n]+__|~~[^~\n]+~~|\*[^*\n]+\*|(?<![\w])_[^_\n]+_(?![\w])|`[^`\n]+`|\$[^$\n]+\$)/gi;
     const parts=[]; let prev=0,m;
     while((m=re.exec(s))){
       // Ignore markup escaped with an odd number of backslashes.
@@ -120,7 +148,13 @@
       if(slashes%2)continue;
       if(m.index>prev)parts.push({type:'text',text:decodeMdEscapes(s.slice(prev,m.index))});
       const x=m[0];let type='text',value=x,href='';
-      if(x.startsWith('![')){type='image';const k=x.indexOf('](');value=x.slice(2,k);href=x.slice(k+2,-1);}
+      if(x.startsWith('![')){
+        const image=x.match(/^!\[((?:\\[\\\[\]]|[^\]])*)\]\(([\s\S]*)\)$/);
+        const target=image[2].trim();
+        type='image';
+        value=decodeMdEscapes(image[1]);
+        href=target.startsWith('<')?target.slice(1,-1):target.replace(/\\([()])/g,'$1');
+      }
       else if(x.startsWith('[')){type='link';const k=x.indexOf('](');value=x.slice(1,k);href=x.slice(k+2,-1);}
       else if(x.startsWith('**')||x.startsWith('__')){type='bold';value=x.slice(2,-2);}
       else if(x.startsWith('~~')){type='strike';value=x.slice(2,-2);}
@@ -131,18 +165,20 @@
       else if(x.startsWith('*')||x.startsWith('_')){type='italic';value=x.slice(1,-1);}
       else if(x.startsWith('`')){type='code';value=x.slice(1,-1);}
       else if(x.startsWith('$')){type='math';value=x.slice(1,-1);}
-      parts.push({type,text:value,href});prev=re.lastIndex;
+      parts.push({type,text:value,href,markup:x});prev=re.lastIndex;
     }
     if(prev<s.length)parts.push({type:'text',text:decodeMdEscapes(s.slice(prev))});
     return parts;
   }
   function texEscape(s){return s.replace(/\\/g,'\\textbackslash{}').replace(/([%$&#_{}])/g,'\\$1').replace(/\^/g,'\\textasciicircum{}').replace(/~/g,'\\textasciitilde{}');}
-  function inlineTex(s){return inlineParts(s).map(v=>{const t=texEscape(v.text);switch(v.type){case 'bold':return `\\textbf{${t}}`;case 'italic':return `\\emph{${t}}`;case 'strike':return `\\sout{${t}}`;case 'underline':return `\\underline{${t}}`;case 'highlight':return `\\colorbox{yellow}{${t}}`;case 'sup':return `\\textsuperscript{${t}}`;case 'sub':return `\\textsubscript{${t}}`;case 'code':return `\\texttt{${t}}`;case 'link':return `\\href{${texEscape(v.href)}}{${t}}`;case 'image':return `\\includegraphics[width=.7\\linewidth]{${texEscape(v.href)}}`;case 'math':return '$'+v.text+'$';default:return t;}}).join('');}
-  function toTex(blocks,standalone=true){let body=blocks.map(b=>{
-    switch(b.type){case 'heading':return `\\${['section','subsection','subsubsection','paragraph','subparagraph','subparagraph'][b.level-1]}{${inlineTex(b.text)}}`;
-      case 'p':return inlineTex(b.text);case 'hr':return '\\hrule';case 'math':return '\\[\n'+b.text+'\n\\]';case 'code':return '\\begin{verbatim}\n'+b.text+'\n\\end{verbatim}';case 'quote':return '\\begin{quote}\n'+inlineTex(b.text)+'\n\\end{quote}';
-      case 'list':return `\\begin{${b.ordered?'enumerate':'itemize'}}\n`+b.items.map(t=>'\\item '+inlineTex(t)).join('\n')+`\n\\end{${b.ordered?'enumerate':'itemize'}}`;
-      case 'table':{const w=Math.max(1,...b.rows.map(r=>r.length));const rules=b.borders!==false;return `\\begin{tabular}{${'l'.repeat(w)}}\n`+(rules?'\\hline\n':'')+b.rows.map(r=>r.map(inlineTex).join(' & ')+' \\\\'+(rules?'\n\\hline':'')).join('\n')+'\n\\end{tabular}';}
+  function inlineTex(s,resources){return inlineParts(s).map(v=>{const t=texEscape(v.text);switch(v.type){case 'bold':return `\\textbf{${t}}`;case 'italic':return `\\emph{${t}}`;case 'strike':return `\\sout{${t}}`;case 'underline':return `\\underline{${t}}`;case 'highlight':return `\\colorbox{yellow}{${t}}`;case 'sup':return `\\textsuperscript{${t}}`;case 'sub':return `\\textsubscript{${t}}`;case 'code':return `\\texttt{${t}}`;case 'link':return `\\href{${texEscape(v.href)}}{${t}}`;case 'image':return `\\includegraphics[width=.7\\linewidth]{${texEscape(localImage(v.href,resources)?.path??v.href).replace(/\\_/g,'_')}}`;case 'math':return '$'+v.text+'$';default:return t;}}).join('');}
+  function toTex(blocks,standalone=true,resources={}){
+    const convertInline=text=>inlineTex(text,resources);
+    const body=blocks.map(b=>{
+    switch(b.type){case 'heading':return `\\${['section','subsection','subsubsection','paragraph','subparagraph','subparagraph'][b.level-1]}{${convertInline(b.text)}}`;
+      case 'p':return convertInline(b.text);case 'hr':return '\\hrule';case 'math':return '\\[\n'+b.text+'\n\\]';case 'code':return '\\begin{verbatim}\n'+b.text+'\n\\end{verbatim}';case 'quote':return '\\begin{quote}\n'+convertInline(b.text)+'\n\\end{quote}';
+      case 'list':return `\\begin{${b.ordered?'enumerate':'itemize'}}\n`+b.items.map(t=>'\\item '+convertInline(t)).join('\n')+`\n\\end{${b.ordered?'enumerate':'itemize'}}`;
+      case 'table':{const w=Math.max(1,...b.rows.map(r=>r.length));const rules=b.borders!==false;return `\\begin{tabular}{${'l'.repeat(w)}}\n`+(rules?'\\hline\n':'')+b.rows.map(r=>r.map(convertInline).join(' & ')+' \\\\'+(rules?'\n\\hline':'')).join('\n')+'\n\\end{tabular}';}
       default:return '';
     }
   }).join('\n\n');
@@ -155,7 +191,6 @@
       .replace(/\\texttt\{([^{}]*)\}/g,'`$1`').replace(/\\sout\{([^{}]*)\}/g,'~~$1~~')
       .replace(/\\underline\{([^{}]*)\}/g,'<u>$1</u>').replace(/\\colorbox\{yellow\}\{([^{}]*)\}/g,'==$1==')
       .replace(/\\textsuperscript\{([^{}]*)\}/g,'<sup>$1</sup>').replace(/\\textsubscript\{([^{}]*)\}/g,'<sub>$1</sub>')
-      .replace(/\\includegraphics(?:\[[^\]]*\])?\{([^{}]*)\}/g,'![]($1)')
       .replace(/\\textbackslash\{\}/g,'\\').replace(/\\textasciitilde\{\}/g,'~').replace(/\\textasciicircum\{\}/g,'^')
       .replace(/\\\((.*?)\\\)/g,'$$$1$').replace(/\\([%$&#_{}])/g,(_,ch)=>'$_#'.includes(ch)?'\\'+ch:ch).replace(/\\(?:LaTeX|TeX)(?![A-Za-z])/g,'$&');
     return t.replace(/\\(?:noindent|par)\b/g,'').trim();
@@ -188,6 +223,8 @@
     });
     s=s.replace(/\\\[([\s\S]*?)\\\]|\$\$([\s\S]*?)\$\$|\\\(([\s\S]*?)\\\)|(?<![\\$])\$(?!\$)((?:\\[\s\S]|[^$\\])+?)\$/g,
       (_,a,b,c,d)=>hold(a!==undefined||b!==undefined?'$$\n'+(a??b).trim()+'\n$$':'$'+(c??d).trim()+'$'));
+    s=s.replace(/\\includegraphics(?:\[[^\]]*\])?\{([^{}]*)\}/g,(_,path)=>
+      hold(markdownImage('',path.trim().replace(/^"|"$/g,'').replace(/\\([%$&#_])/g,'$1'))));
     const beg=s.indexOf('\\begin{document}'),end=s.indexOf('\\end{document}');if(beg>=0)s=s.slice(beg+16,end>=0?end:undefined);
     s=s.replace(/\\(section|subsection|subsubsection|paragraph|subparagraph)\*?\{([^{}]*)\}/g,(_,k,t)=>'#'.repeat({section:1,subsection:2,subsubsection:3,paragraph:4,subparagraph:5}[k])+' '+texInline(t)+'\n');
     s=s.replace(/^\s*\\hrule\s*$/gm,'---');
@@ -221,15 +258,41 @@
         }
       }catch(e){console.warn('Numbering metadata could not be read',e);}
     }
+    function readDrawing(drawing){
+      const blip=at(drawing,'blip','http://schemas.openxmlformats.org/drawingml/2006/main');
+      if(!blip)return '';
+      const rel=rels[blip.getAttributeNS(R,'embed')];
+      const target=rel?.target;
+      if(target&&!rel.external){
+        const path=localImage(target.startsWith('/')?target.slice(1):'word/'+target,z)?.path;
+        if(path?.startsWith('word/')){
+          const key=path.slice(5);
+          resources[key]??=new Blob([z[path]],{type:wordImageTypes[ext(path)]??''});
+          const alt=at(drawing,'docPr','http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing')?.getAttribute('descr')??'';
+          return markdownImage(alt,key);
+        }
+      }
+      warnings.push('Word文書内の画像データを読み込めませんでした。');
+      return '';
+    }
     function textRun(r){
       const properties=first(r,'rPr');
       const hidden=first(properties,'vanish')||first(properties,'webHidden');
       if(hidden && !['0','false','off'].includes(attr(hidden,'val').toLowerCase()))return '';
-      let v='';for(const c of r.children){if(c.localName==='t')v+=c.textContent;else if(c.localName==='tab')v+='\t';else if(c.localName==='br'||c.localName==='cr')v+='\n';else if(c.localName==='drawing'){
-        const blip=at(c,'blip','http://schemas.openxmlformats.org/drawingml/2006/main'),id=blip?.getAttributeNS(R,'embed'),rel=rels[id];
-        if(rel&&!rel.external){const path=normalize('word/'+rel.target);if(z[path]){const key='media/'+path.split('/').pop();resources[key]=new Blob([z[path]]);v+=`![](${key})`;}} }
+      let text='', result='';
+      for(const child of r.children){
+        if(child.localName==='t')text+=child.textContent;
+        else if(child.localName==='tab')text+='\t';
+        else if(child.localName==='br'||child.localName==='cr')text+='\n';
+        else if(child.localName==='drawing'){
+          result+=formatRun(text,properties)+readDrawing(child);
+          text='';
+        }
       }
-      const prop=first(r,'rPr');if(!v || v.startsWith('!['))return v;
+      return result+formatRun(text,properties);
+    }
+    function formatRun(v,prop){
+      if(!v)return '';
       v=escapeMdLiteral(v);
       if(first(prop,'b')&&attr(first(prop,'b'),'val')!=='0')v='**'+v+'**';
       if(first(prop,'i')&&attr(first(prop,'i'),'val')!=='0')v='*'+v+'*';
@@ -270,7 +333,7 @@
         blocks.push({type:'table',rows,hasHeader:!!hdr&&attr(hdr,'val')!=='0',borders});}}
     return {blocks,resources,warnings};
   }
-  function docxMake(blocks,resources={},warnings=[]){
+  function docxMake(blocks,resources,imageSizes,warnings){
     let linkId=10,imgId=100,links=[],assets={},mediaTypes={},hasNumber=false;
     const putRun=(t,style='')=>`<w:r>${style?`<w:rPr>${style}</w:rPr>`:''}${String(t).split(/(\n|\t)/).map(part=>part==='\n'?'<w:br/>':part==='\t'?'<w:tab/>':`<w:t xml:space="preserve">${esc(part)}</w:t>`).join('')}</w:r>`;
     function mathRun(tex,display=false){
@@ -293,10 +356,19 @@
         case 'sup':return putRun(v.text,'<w:vertAlign w:val="superscript"/>');
         case 'sub':return putRun(v.text,'<w:vertAlign w:val="subscript"/>');
         case 'link':{const id=`rId${linkId++}`;links.push(`<Relationship Id="${id}" Type="${R}/hyperlink" Target="${esc(v.href)}" TargetMode="External"/>`);return `<w:hyperlink r:id="${id}">${putRun(v.text,'<w:color w:val="0563C1"/><w:u w:val="single"/>')}</w:hyperlink>`;}
-        case 'image':{const name=normalize(v.href),file=resources[name],suffix=ext(name),mime=({png:'image/png',jpg:'image/jpeg',jpeg:'image/jpeg',gif:'image/gif'}[suffix]);
-          if(!file||!mime)return putRun('!['+v.text+']('+v.href+')');const id=`rId${imgId++}`,med=`media/image${imgId}.${suffix}`;assets[`word/${med}`]=file;mediaTypes[suffix]=mime;
+        case 'image':{
+          const image=localImage(v.href,resources);
+          const size=imageSizes.get(image?.path);
+          if(!size){
+            warnings.push('画像を埋め込めなかったため、元の記法を残しました（未添付・非対応形式・破損）: '+v.href);
+            return putRun(v.markup);
+          }
+          const {path:name,file}=image, {cx,cy}=size;
+          const suffix=ext(name), id=`rId${imgId++}`, med=`media/image${imgId}.${suffix}`;
+          assets[`word/${med}`]=file;
+          mediaTypes[suffix]=wordImageTypes[suffix];
           links.push(`<Relationship Id="${id}" Type="${R}/image" Target="${med}"/>`);
-          return `<w:r><w:drawing><wp:inline xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"><wp:extent cx="3800000" cy="2500000"/><wp:docPr id="${imgId}" name="${esc(v.text||'画像')}"/><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:nvPicPr><pic:cNvPr id="0" name="${esc(name)}"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="${id}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="3800000" cy="2500000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>`;
+          return `<w:r><w:drawing><wp:inline xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"><wp:extent cx="${cx}" cy="${cy}"/><wp:docPr id="${imgId}" name="画像 ${imgId}" descr="${esc(v.text)}"/><wp:cNvGraphicFramePr><a:graphicFrameLocks xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" noChangeAspect="1"/></wp:cNvGraphicFramePr><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:nvPicPr><pic:cNvPr id="0" name="${esc(name)}"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="${id}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>`;
         }
         default:return putRun(v.text);
       }
@@ -327,13 +399,46 @@
     for(const [k,v] of Object.entries(assets))files[k]=v instanceof Uint8Array?v:new Uint8Array();
     return {files,assets};
   }
-  async function buildDocx(blocks,resources,warnings=[]){const {files,assets}=docxMake(blocks,resources,warnings);for(const [key,blob] of Object.entries(assets))files[key]=new Uint8Array(await blob.arrayBuffer());return zipWrite(files);}
+  async function buildDocx(blocks,resources={},warnings=[]){
+    const sizes=new Map();
+    for(const {href} of imageReferences(blocks)){
+      const image=localImage(href,resources);
+      if(!image || !Object.hasOwn(wordImageTypes,ext(image.path)) || sizes.has(image.path))continue;
+      sizes.set(image.path,null);
+      const img=new Image();
+      const url=URL.createObjectURL(image.file);
+      try {
+        img.src=url;
+        await img.decode();
+        const {naturalWidth:width,naturalHeight:height}=img;
+        if(width&&height){
+          // Fit within a page without enlarging small images. 9,525 EMU = one CSS pixel.
+          const scale=Math.min(9525, 5400000/width, 7000000/height);
+          sizes.set(image.path,{cx:Math.max(1,Math.round(width*scale)),cy:Math.max(1,Math.round(height*scale))});
+        }
+      } catch { /* docxMake preserves the reference and reports failed images. */ }
+      finally { URL.revokeObjectURL(url); }
+    }
+    const {files,assets}=docxMake(blocks,resources,sizes,warnings);
+    for(const [key,blob] of Object.entries(assets))files[key]=new Uint8Array(await blob.arrayBuffer());
+    return zipWrite(files);
+  }
   function preview(blocks,host,resources={},urlList=[]){
     const element=(tag,text,into=host)=>{const n=document.createElement(tag);if(text!=null)n.textContent=text;into.append(n);return n;};
     function renderInline(s,into){for(const v of inlineParts(s)){let n;
       switch(v.type){case 'bold':n=element('strong',v.text,into);break;case 'italic':n=element('em',v.text,into);break;case 'strike':n=element('s',v.text,into);break;case 'underline':n=element('u',v.text,into);break;case 'highlight':n=element('mark',v.text,into);break;case 'sup':n=element('sup',v.text,into);break;case 'sub':n=element('sub',v.text,into);break;case 'code':n=element('code',v.text,into);break;case 'math':n=element('span',null,into);if(window.OfflineMath)window.OfflineMath.render(v.text,n);else n.textContent='$'+v.text+'$';break;
         case 'link':n=element('a',v.text,into);if(/^https?:\/\//i.test(v.href)){n.href=v.href;n.rel='noopener noreferrer';n.target='_blank';}break;
-        case 'image':{const name=normalize(v.href),file=resources[name];if(file){n=element('img',null,into);n.alt=v.text;n.src=URL.createObjectURL(file);urlList.push(n.src);n.style.maxWidth='100%';}else element('span','!['+v.text+']('+v.href+')',into);break;}
+        case 'image':{
+          const image=localImage(v.href,resources);
+          if(image){
+            n=element('img',null,into);
+            n.alt=v.text;
+            n.src=URL.createObjectURL(image.file);
+            urlList.push(n.src);
+            n.addEventListener('error',()=>n.replaceWith(document.createTextNode(v.markup)),{once:true});
+          }else element('span',v.markup,into);
+          break;
+        }
         default:element('span',v.text,into);
       }}
     }
@@ -344,5 +449,5 @@
       }
     }
   }
-  window.OfflineConverter={zipRead,zipWrite,mdBlocks,blocksToMarkdown,toTex,fromTex,docxRead,buildDocx,preview,normalize};
+  window.OfflineConverter={zipRead,zipWrite,mdBlocks,blocksToMarkdown,toTex,fromTex,docxRead,buildDocx,preview,normalize,localImage,imageReferences};
 })();
