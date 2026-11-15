@@ -20,10 +20,10 @@ Word（.docx）・Markdown・TeXをブラウザ内で相互変換します。共
 
 ## 開発・検証（任意）
 
-アプリの利用にはNode.jsは不要です。開発用スクリプトだけNode.js 22以降を使います。配布ファイルをコピーする通常のビルドはインストール不要です。数式ライブラリを更新する場合だけ `npm ci` → `npm run vendor:math` を実行してください（バージョンはpackage-lock.jsonで固定）。
+アプリの利用にはNode.jsは不要です。開発用スクリプトだけNode.js 22以降を使います。配布ファイルを生成する通常のビルドはインストール不要です。数式ライブラリを更新する場合だけ `npm ci` → `npm run vendor:math` を実行してください（バージョンはpackage-lock.jsonで固定）。
 
 - `npm ci` → `node test.mjs`：Markdown・TeX・ZIP・OMML数式・配布構成の回帰テスト。
-- `node build.mjs`：アプリファイルと `vendor/` を `dist/` にコピー。`dist/index.html` も直接開けます。
+- `node build.mjs`：実行用の9ファイルを `dist/` に生成し、数式フォントをCSSに内蔵。`dist/index.html` も直接開けます。
 - `node serve.mjs`：`dist/` を `http://127.0.0.1:4173` で配信。
 - `node serve.mjs .` → `http://127.0.0.1:4173/tests/browser.html`：ブラウザで6方向変換、Word往復、画像、監査項目、UIのTab切替・ライブ更新を検証。`tests/browser.html` の直接起動も可能です。
 
