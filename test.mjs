@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
 import { runInNewContext } from 'node:vm';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 process.chdir(fileURLToPath(new URL('./', import.meta.url)));
 const context = { window: {}, TextEncoder, TextDecoder, Blob, Uint8Array, DataView, Response, DecompressionStream };
@@ -29,15 +30,36 @@ for (const name of ['app-offline.js', 'engine-offline.js']) {
 const pkg = JSON.parse(await readFile('package.json', 'utf8'));
 assert.deepEqual(Object.keys(pkg.dependencies).sort(), ['katex','mathml2omml','omml2mathml','mathml-to-latex'].sort());
 if ((await readdir('.')).includes('dist')) {
-  assert.deepEqual((await readdir('dist')).sort(), ['index.html', 'style.css', 'engine-offline.js', 'app-offline.js', 'README.txt', 'SUPPORTED_FEATURES.md', 'AUDIT_REPORT.md', 'NOTICE.txt', 'vendor'].sort());
-  async function compareTree(folder='') {
-    for(const entry of await readdir('dist/'+folder,{withFileTypes:true})) {
-      const path=folder+entry.name;
-      if(entry.isDirectory())await compareTree(path+'/');
-      else assert.deepEqual(await readFile('dist/'+path),await readFile(path),path);
-    }
+  const files = await readdir('dist', { recursive: true, withFileTypes: true });
+  const relativePaths = files.filter(entry => entry.isFile())
+    .map(entry => join(entry.parentPath, entry.name).replaceAll('\\','/').replace(/^dist\//,''));
+  assert.deepEqual(relativePaths.sort(), [
+    'README.md', 'NOTICE.txt', 'index.html', 'style.css', 'engine-offline.js', 'app-offline.js',
+    'vendor/katex.min.css', 'vendor/math-libraries.js', 'vendor/sources/mathml2omml.js',
+  ].sort());
+  for (const path of ['style.css', 'engine-offline.js', 'app-offline.js', 'vendor/math-libraries.js', 'vendor/sources/mathml2omml.js']) {
+    assert.deepEqual(await readFile('dist/'+path), await readFile(path), path);
   }
-  await compareTree();
+  const builtHtml = await readFile('dist/index.html', 'utf8');
+  assert.match(builtHtml, /href="\.\/README\.md"/);
+  for (const match of builtHtml.matchAll(/(?:src|href)="\.\/([^"#]+)"/g)) await readFile('dist/'+match[1]);
+  assert.equal(builtHtml.replace(/<a href="\.\/README\.md" target="_blank" rel="noopener">README<\/a>に操作方法と対応範囲をまとめています。/, ''),
+    html.replace(/<a href="\.\/SUPPORTED_FEATURES\.md" target="_blank" rel="noopener">詳細な対応表（Markdownファイル）<\/a>も同梱しています。/, ''));
+  const originalCss = await readFile('vendor/katex.min.css','utf8');
+  const embeddedCss = await readFile('dist/vendor/katex.min.css','utf8');
+  const fontFaces = /@font-face\{[^}]+\}/g;
+  const originalFaces = [...originalCss.matchAll(fontFaces)];
+  const embeddedFaces = [...embeddedCss.matchAll(fontFaces)];
+  assert.equal(embeddedFaces.length, originalFaces.length);
+  const stripSource = face => face.replace(/src:[^}]+/,'');
+  for (const [i,[face]] of originalFaces.entries()) {
+    const path = face.match(/url\((fonts\/[^()]+\.woff2)\)/)[1];
+    const embedded = embeddedFaces[i][0];
+    assert.equal(stripSource(embedded), stripSource(face));
+    const data = embedded.match(/url\("data:font\/woff2;base64,([^"]+)"\) format\("woff2"\)/)[1];
+    assert.deepEqual(Buffer.from(data,'base64'), await readFile('vendor/'+path));
+  }
+  assert.equal(embeddedCss.replace(fontFaces,''), originalCss.replace(fontFaces,''));
 }
 console.log('PASS: Markdown/TeX, metadata, ZIP, invalid paths, offline assets and distribution');
 

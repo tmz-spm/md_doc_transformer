@@ -17,7 +17,7 @@ index.html → engine-offline.js → window.OfflineConverter
 | `SUPPORTED_FEATURES.md` | 対応・部分対応・未対応の一覧 |
 | `AUDIT_REPORT.md` | ZIP作成時の監査記録と残る制約 |
 | `README.txt` / `NOTICE.txt` | 配布ZIPに含める操作説明と使用技術の説明 |
-| `build.mjs` | アプリファイルとvendor/を空にした `dist/` へコピー。WASM等の旧生成物も残さない |
+| `build.mjs` | 実行用の9ファイルを `dist/` に生成。WOFF2フォントをKaTeXのCSSへ内蔵 |
 | `serve.mjs` | 任意の手元確認用HTTPサーバー。既定は `dist/`、引数 `.` でソースを配信 |
 | `test.mjs` | Node.js組み込み機能だけで実行する構成・解析・ZIPテスト |
 | `tests/browser.html` / `tests/browser.js` | ブラウザのXML/DOM/ZIP APIと実際のUIによる回帰テスト |
