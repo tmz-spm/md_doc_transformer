@@ -16,6 +16,8 @@ Word（.docx）・Markdown・TeXをブラウザ内で相互変換します。共
 
 詳細は [SUPPORTED_FEATURES.md](SUPPORTED_FEATURES.md)、点検内容は [AUDIT_REPORT.md](AUDIT_REPORT.md)、操作説明は [README.txt](README.txt) を参照してください。監査報告書の検証記録はZIP作成時点の記録です。
 
+機能ごとのユーザー操作と呼び出し先、JSファイル・関数の入出力・副作用、実装ソース全文は [ユーザー操作・対応機能・JavaScript関数リファレンス](docs/FEATURE_FUNCTION_REFERENCE.md) にまとめています。
+
 **以前のPandoc版とは対応範囲が異なります。** 脚注、入れ子リスト、結合セル、段組み、改ページや複雑な組版は再現できません。数式は下記の範囲でOMMLに対応しています。特殊な数式や独自マクロには制限があります。Word参照スタイルは未対応で、画面でも無効になっています。旧形式 `.doc` も対象外です。
 
 ## 開発・検証（任意）
