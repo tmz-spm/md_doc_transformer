@@ -1,11 +1,33 @@
 # 文書変換：ユーザー操作・対応機能・JavaScript関数リファレンス
 
+## ファイル別の機能一覧
+
+| ファイル | 内容・公開先 | 関連する操作 |
+| --- | --- | --- |
+| `index.html` | 入出力形式、編集欄、プレビュー、各ボタン、対応表を定義し、CSSとJSを読み込む | アプリの起動口・画面構造 |
+| `style.css` | 画面レイアウト、入力・出力ペイン、文書プレビューの表示を整える | アプリ全体の見た目 |
+| `vendor/katex.min.css` | 数式の表示用CSS。配布版では必要なWOFF2フォントを内蔵する | 数式プレビュー |
+| `app-offline.js` | 即時実行関数内でUI状態、サンプル、名前付き関数、匿名イベント処理を定義。グローバルへの関数公開なし | 入力・タブ・ファイル・変換・コピー・保存・関連ファイル・対応表 |
+| `engine-offline.js` | ZIP、Markdown、TeX、Word OOXML、画像、DOMプレビュー。末尾で13関数を `window.OfflineConverter` に公開 | 全形式の解析・出力とプレビュー |
+| `math-support.js` | 4種類の数式ライブラリを接続。ES moduleで3関数をexport | 数式描画、Word OMMLとの相互変換 |
+| `vendor/math-libraries.js` | `math-support.js` と依存ライブラリを束ねた生成済みIIFE。`OfflineMath`を公開 | HTMLから実際に読み込まれる数式処理 |
+| `scripts/browser-dom/index.cjs` | omml2mathmlが使うDOMをブラウザ組み込みDOMへ置き換えるアダプター | Word数式の読み取りを間接的に支える |
+| `vendor/sources/mathml2omml.js` | 同梱ライブラリの未圧縮ソース。通常のHTMLから直接実行するファイルではない | ソース提供用。実際の変換は数式バンドルを通す |
+| `scripts/vendor-math.mjs` | esbuildで数式バンドルとライブラリ一覧を生成し、CSS・フォント・ライセンス・ソースを同梱 | 開発者の `npm run vendor:math` |
+| `build.mjs` | HTMLの説明リンク差し替え、KaTeX WOFF2のCSS埋め込み、ライセンス統合、配布用9ファイル生成 | 開発者の `npm run build` |
+| `serve.mjs` | 静的ファイルをlocalhostで配信 | 開発者の `npm start` |
+| `test.mjs` | Nodeで実行する構成・解析・ZIP・数式等の検証コード | 開発・回帰検証用 |
+| `tests/browser.js` | ブラウザのDOM・ZIP・変換・UIを確認する検証コード | 開発・回帰検証用 |
+
+各JSファイルの関数・入出力は後半の[ファイル別リファレンス](#5-javascriptファイル関数リファレンス)に記載する。
+
 調査対象：[`tmz-spm/md_doc_transformer`](https://github.com/tmz-spm/md_doc_transformer)、`main` のコミット [`3fd645493724c33df29f78b18596ae4760466ef1`](https://github.com/tmz-spm/md_doc_transformer/commit/3fd645493724c33df29f78b18596ae4760466ef1)（2026-11-16確認）。
 
 画面の文言・DOM IDは `index.html`、操作の呼び出し先は `app-offline.js`、変換の実装は `engine-offline.js` と `math-support.js` を根拠に記載した。既存の `SUPPORTED_FEATURES.md` と照合し、操作説明と関数リファレンスをこの1ファイルに統合している。静的なソース調査に基づく資料であり、実ブラウザやMicrosoft Wordでの動作確認結果を表すものではない。
 
 ## 目次
 
+- [ファイル別の機能一覧](#ファイル別の機能一覧)
 - [1. 全体構成と読み方](#1-全体構成と読み方)
 - [2. ユーザー操作から関数への対応](#2-ユーザー操作から関数への対応)
 - [3. 対応機能ごとの実装](#3-対応機能ごとの実装)
@@ -215,36 +237,13 @@ type Output = {
 
 ## 5. JavaScriptファイル・関数リファレンス
 
-調査コミットのソース：
-
-- [app-offline.js](https://github.com/tmz-spm/md_doc_transformer/blob/3fd645493724c33df29f78b18596ae4760466ef1/app-offline.js)
-- [engine-offline.js](https://github.com/tmz-spm/md_doc_transformer/blob/3fd645493724c33df29f78b18596ae4760466ef1/engine-offline.js)
-- [math-support.js](https://github.com/tmz-spm/md_doc_transformer/blob/3fd645493724c33df29f78b18596ae4760466ef1/math-support.js)
-- [scripts/browser-dom/index.cjs](https://github.com/tmz-spm/md_doc_transformer/blob/3fd645493724c33df29f78b18596ae4760466ef1/scripts/browser-dom/index.cjs)
-- [scripts/vendor-math.mjs](https://github.com/tmz-spm/md_doc_transformer/blob/3fd645493724c33df29f78b18596ae4760466ef1/scripts/vendor-math.mjs)
-- [build.mjs](https://github.com/tmz-spm/md_doc_transformer/blob/3fd645493724c33df29f78b18596ae4760466ef1/build.mjs)
-- [serve.mjs](https://github.com/tmz-spm/md_doc_transformer/blob/3fd645493724c33df29f78b18596ae4760466ef1/serve.mjs)
+リファレンスはファイルを大区分とし、その中に関数の入力・出力・副作用をまとめる。各ファイルの役割は冒頭の一覧を参照。
 
 戻り値欄の `void` は実質 `undefined` を表す。`async`関数の値はPromiseで包まれる。UI関数は戻り値よりDOMやクロージャ状態の変更を主な出力とする。以下の行番号は冒頭の調査コミットを基準とし、末尾のソース全文にも同じ内容を収録した。
 
-### 5.1 ファイルの中身と責務
+### 5.1 `app-offline.js`：UI制御
 
-| ファイル | 内容・公開先 | 関連する操作 |
-| --- | --- | --- |
-| `app-offline.js` | 即時実行関数内でUI状態、サンプル、名前付き関数、匿名イベント処理を定義。グローバルへの関数公開なし | 入力・タブ・ファイル・変換・コピー・保存・関連ファイル・対応表 |
-| `engine-offline.js` | ZIP、Markdown、TeX、Word OOXML、画像、DOMプレビュー。末尾で13関数を `window.OfflineConverter` に公開 | 全形式の解析・出力とプレビュー |
-| `math-support.js` | 4種類の数式ライブラリを接続。ES moduleで3関数をexport | 数式描画、Word OMMLとの相互変換 |
-| `vendor/math-libraries.js` | `math-support.js` と依存ライブラリを束ねた生成済みIIFE。`OfflineMath`を公開 | HTMLから実際に読み込まれる数式処理 |
-| `scripts/browser-dom/index.cjs` | omml2mathmlが使うDOMをブラウザ組み込みDOMへ置き換えるアダプター | Word数式の読み取りを間接的に支える |
-| `vendor/sources/mathml2omml.js` | 同梱ライブラリの未圧縮ソース。通常のHTMLから直接実行するファイルではない | ソース提供用。実際の変換は数式バンドルを通す |
-| `scripts/vendor-math.mjs` | esbuildで数式バンドルとライブラリ一覧を生成し、CSS・フォント・ライセンス・ソースを同梱 | 開発者の `npm run vendor:math` |
-| `build.mjs` | HTMLの説明リンク差し替え、KaTeX WOFF2のCSS埋め込み、ライセンス統合、配布用9ファイル生成 | 開発者の `npm run build` |
-| `serve.mjs` | 静的ファイルをlocalhostで配信 | 開発者の `npm start` |
-| `test.mjs` / `tests/browser.js` | 構文解析・ZIP・数式・UI等の検証コード。アプリ機能の実装本体ではない | 開発・回帰検証用。個々のテスト関数は本資料のAPI対象外 |
-
-依存ライブラリ内部の全関数はリファレンス対象外とし、アプリから使用する接点を5.4に記載する。主なバージョンはKaTeX `0.19.1`、mathml2omml `0.5.0`、omml2mathml `1.3.0`、mathml-to-latex `1.8.0`。依存全体は `vendor/manifest.json` とライセンス文書を参照する。
-
-### 5.2 `app-offline.js`：UI制御
+[調査対象のソース](https://github.com/tmz-spm/md_doc_transformer/blob/3fd645493724c33df29f78b18596ae4760466ef1/app-offline.js)
 
 参照元：`app-offline.js`。以下は即時実行関数内のローカル関数で、外部APIではない。
 
@@ -269,7 +268,9 @@ type Output = {
 
 無名関数として実装されたダウンロード・コピー・入れ替え・イベントハンドラーの入出力は2章に記載した。`download()`、`copy()`、`swap()`という名前付き関数は存在しない。
 
-### 5.3 `engine-offline.js`：変換エンジン
+### 5.2 `engine-offline.js`：変換エンジン
+
+[調査対象のソース](https://github.com/tmz-spm/md_doc_transformer/blob/3fd645493724c33df29f78b18596ae4760466ef1/engine-offline.js)
 
 #### 公開API：`window.OfflineConverter`
 
@@ -341,7 +342,9 @@ type Output = {
 | `preview.element(tag, text, into=host)`（495） | タグ名、文字列またはnull、親DOM | 作成・appendしたElement。textは`textContent`へ |
 | `preview.renderInline(s, into)`（496） | インライン文字列、親DOM | `void`。装飾要素・安全なリンク・画像・数式を追加。Blob URLを外部配列へ記録 |
 
-### 5.4 `math-support.js`：数式API
+### 5.3 `math-support.js`：数式API
+
+[調査対象のソース](https://github.com/tmz-spm/md_doc_transformer/blob/3fd645493724c33df29f78b18596ae4760466ef1/math-support.js)
 
 `scripts/vendor-math.mjs` がバンドル化した後は `window.OfflineMath` のAPIとして使う。
 
@@ -352,18 +355,65 @@ type Output = {
 | `toOmml(tex, display=false)`（18、公開） | TeX文字列、表示モード | OMML XML`string` | `katex.renderToString(output:'mathml')` → annotation除去 → `mml2omml(...,{disableDecode:true})`。別行なら`m:oMathPara`で包む。生成失敗はthrow |
 | `fromOmml(node)`（27、公開） | Wordの`oMath`／`oMathPara` Element | TeX`string` | `omml2mathml()` → `XMLSerializer` → `MathMLToLaTeX.convert()` → KaTeXで再検証。空数式・無効構文等はthrow |
 
-### 5.5 DOMアダプターと開発用JS
+### 5.4 `scripts/browser-dom/index.cjs`：DOMアダプター
 
-| ファイル・関数／入口 | 入力 | 出力・副作用 | 用途 |
+[調査対象のソース](https://github.com/tmz-spm/md_doc_transformer/blob/3fd645493724c33df29f78b18596ae4760466ef1/scripts/browser-dom/index.cjs)
+
+Word数式の読み込みで使うDOMを、ブラウザ組み込みAPIへ接続する。
+
+| 関数／入口 | 入力 | 出力・副作用 | 用途 |
 | --- | --- | --- | --- |
-| `scripts/browser-dom/index.cjs` / `exports.document()`（2） | なし | 新しいXMLDocument | `document.implementation.createDocument(null,null)`でomml2mathml向け文書を生成 |
-| 同 / `exports.implementation()`（3） | なし | ブラウザの`DOMImplementation` | Node/jsdom依存をブラウザAPIへ置換 |
-| `scripts/vendor-math.mjs` / トップレベル | インストール済み依存、math-support、ライセンス | バンドルJS、CSS、フォント、ライセンス、未圧縮ソース、manifestを生成 | `esbuild.build()`、`cp()`、`writeFile()`。ユーザーの画面操作では実行しない |
-| `build.mjs` / `read(path)`（6） | リポジトリ基準の相対パス | `Promise<string>` | ビルド元ファイルをUTF-8で読む |
-| `build.mjs` / `write(path, content)`（7） | dist基準の相対パス、文字列 | `Promise<void>`、ファイルへ書き込む | 配布ファイル生成 |
-| `build.mjs` / トップレベル | ソース、vendor、配布README | `dist/`の9ファイル。既存distは削除して再生成 | フォント・HTMLリンクの整合を確認後、WOFF2をCSSへ埋め込みライセンスを統合。フォント宣言やバイトが不正ならthrow |
-| `serve.mjs` / HTTPリクエストのasync匿名コールバック（8） | Nodeの`req`・`res`、CLI引数のルート（既定dist） | HTTP 200とファイルbytes、または404 | localhost:4173。ルート外やドットで始まるパス要素は拒否。ディレクトリはindex.htmlへ解決 |
-| `serve.mjs` / listenコールバック（18） | なし | コンソール出力 | 起動先URLを表示 |
+| `exports.document()`（2） | なし | 新しいXMLDocument | `document.implementation.createDocument(null,null)`でomml2mathml向け文書を生成 |
+| `exports.implementation()`（3） | なし | ブラウザの`DOMImplementation` | Node/jsdom依存をブラウザAPIへ置換 |
+
+### 5.5 `scripts/vendor-math.mjs`：数式バンドル生成
+
+[調査対象のソース](https://github.com/tmz-spm/md_doc_transformer/blob/3fd645493724c33df29f78b18596ae4760466ef1/scripts/vendor-math.mjs)
+
+`npm run vendor:math` で実行する開発用スクリプト。入力・出力は次のとおり。
+
+| 関数／入口 | 入力 | 出力・副作用 | 用途 |
+| --- | --- | --- | --- |
+| トップレベル | インストール済み依存、math-support、ライセンス | バンドルJS、CSS、フォント、ライセンス、未圧縮ソース、manifestを生成 | `esbuild.build()`、`cp()`、`writeFile()`。ユーザーの画面操作では実行しない |
+
+### 5.6 `build.mjs`：配布ファイル生成
+
+[調査対象のソース](https://github.com/tmz-spm/md_doc_transformer/blob/3fd645493724c33df29f78b18596ae4760466ef1/build.mjs)
+
+`npm run build` で実行する。ソースとvendorを基に配布用9ファイルを作る。
+
+| 関数／入口 | 入力 | 出力・副作用 | 用途 |
+| --- | --- | --- | --- |
+| `read(path)`（6） | リポジトリ基準の相対パス | `Promise<string>` | ビルド元ファイルをUTF-8で読む |
+| `write(path, content)`（7） | dist基準の相対パス、文字列 | `Promise<void>`、ファイルへ書き込む | 配布ファイル生成 |
+| トップレベル | ソース、vendor、配布README | `dist/`の9ファイル。既存distは削除して再生成 | フォント・HTMLリンクの整合を確認後、WOFF2をCSSへ埋め込みライセンスを統合。フォント宣言やバイトが不正ならthrow |
+
+### 5.7 `serve.mjs`：静的ファイル配信
+
+[調査対象のソース](https://github.com/tmz-spm/md_doc_transformer/blob/3fd645493724c33df29f78b18596ae4760466ef1/serve.mjs)
+
+`npm start` で実行する任意のローカル確認用サーバー。
+
+| 関数／入口 | 入力 | 出力・副作用 | 用途 |
+| --- | --- | --- | --- |
+| HTTPリクエストのasync匿名コールバック（8） | Nodeの`req`・`res`、CLI引数のルート（既定dist） | HTTP 200とファイルbytes、または404 | localhost:4173。ルート外やドットで始まるパス要素は拒否。ディレクトリはindex.htmlへ解決 |
+| listenコールバック（18） | なし | コンソール出力 | 起動先URLを表示 |
+
+### 5.8 `vendor/math-libraries.js`：実行用数式バンドル
+
+`math-support.js` と依存ライブラリをまとめた生成済みファイル。`index.html` が変換エンジンより先に読み込み、`window.OfflineMath` を公開する。
+
+| 公開関数 | 入力 | 出力・副作用 | 参照 |
+| --- | --- | --- | --- |
+| `OfflineMath.render(tex, host, display=false)` | TeX文字列、描画先DOM、別行表示か | `void`、数式または元TeXをDOMへ描画 | 5.3 `render()`と同じ |
+| `OfflineMath.toOmml(tex, display=false)` | TeX文字列、別行表示か | OMML XML文字列。失敗はthrow | 5.3 `toOmml()`と同じ |
+| `OfflineMath.fromOmml(node)` | OMML Element | TeX文字列。失敗はthrow | 5.3 `fromOmml()`と同じ |
+
+依存ライブラリ内部の全関数は本資料の対象外。主なバージョンはKaTeX `0.19.1`、mathml2omml `0.5.0`、omml2mathml `1.3.0`、mathml-to-latex `1.8.0`。依存全体は `vendor/manifest.json` とライセンス文書を参照する。
+
+### 5.9 `vendor/sources/mathml2omml.js`：同梱ライブラリのソース
+
+mathml2ommlの未圧縮ソースを提供するファイル。`index.html` から直接読み込む実行用ファイルではない。アプリで使う入口は `math-support.js` の `toOmml()` 内の `mml2omml(mathml, {disableDecode:true})` で、MathML文字列をOMML XML文字列へ変換する。個々のライブラリ内部関数は本資料の対象外。
 
 ## 6. 制限・エラー・実装上の注意
 
